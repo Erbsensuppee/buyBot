@@ -13,7 +13,7 @@ const connection = new Connection(process.env.HELIUS_RPC_URL);
 
 // Load existing wallets or create an empty object
 const WALLET_FILE = "wallets.json";
-let wallets = {};
+let wallets = [];
 if (fs.existsSync(WALLET_FILE)) {
     wallets = JSON.parse(fs.readFileSync(WALLET_FILE, "utf8"));
 }
@@ -32,7 +32,7 @@ function getUserWallet(chatId) {
         wallets[chatId] = [{
             label: "W1",
             privateKeyBase58: bs58.encode(newWallet.secretKey),
-            publicKey: newWallet.publicKey.toBase58()
+            publicKey: newWallet.publicKey
         }];
 
         saveWallets();
@@ -52,9 +52,35 @@ bot.on("callback_query", async (query) => {
     const messageId = query.message.message_id; // Get message ID to edit
     const data = query.data;
 
+    if (!allowedUsers.includes(chatId)) {
+        return bot.sendMessage(chatId, "🚫 Access denied. You are not authorized to use this bot.");
+    }
+
     if (data === "buy") {
+        if (!wallets[chatId] || !wallets[chatId].wallets || wallets[chatId].wallets.length === 0) {
+            return bot.sendMessage(chatId, "🚨 You need to create a wallet first.");
+        }
+    
+        const activeIndex = wallets[chatId].activeWallet || 0; // Default to W1
+        const userWallet = wallets[chatId].wallets[activeIndex];
+        const publicKey = userWallet.publicKey;
+    
+        bot.sendMessage(chatId, `💰 *You are using Wallet ${activeIndex + 1}*\n🗝 Public Key: \`${publicKey}\`\n\nEnter the amount you want to buy:`, {
+            parse_mode: "Markdown"
+        });
         bot.sendMessage(chatId, "💰 Enter the amount you want to buy:");
     } else if (data === "sell") {
+        if (!wallets[chatId] || !wallets[chatId].wallets || wallets[chatId].wallets.length === 0) {
+            return bot.sendMessage(chatId, "🚨 You need to create a wallet first.");
+        }
+    
+        const activeIndex = wallets[chatId].activeWallet || 0; // Default to W1
+        const userWallet = wallets[chatId].wallets[activeIndex];
+        const publicKey = userWallet.publicKey;
+    
+        bot.sendMessage(chatId, `💰 *You are using Wallet ${activeIndex + 1}*\n🗝 Public Key: \`${publicKey}\`\n\nEnter the amount you want to sell"}:`, {
+            parse_mode: "Markdown"
+        });
         bot.sendMessage(chatId, "📉 Enter the amount you want to sell:");
     } else if (data === "positions") {
         bot.sendMessage(chatId, "🔎 Fetching your open positions...");
@@ -74,6 +100,19 @@ bot.on("callback_query", async (query) => {
         bot.sendMessage(chatId, "⭐ Viewing your watchlist...");
     } else if (data === "withdraw") {
         bot.sendMessage(chatId, "💸 Withdraw funds...");
+    }else if (data.startsWith("set_active_wallet_")) {
+        const walletIndex = parseInt(data.split("_")[3]); // Extract wallet index
+        if (!wallets[chatId] || !wallets[chatId].wallets[walletIndex]) {
+            return bot.sendMessage(chatId, "❌ Invalid wallet selection.");
+        }
+    
+        // Set the active wallet index
+        wallets[chatId].activeWallet = walletIndex;
+        saveWallets();
+    
+        // Refresh the wallets menu to show the new active wallet
+        bot.answerCallbackQuery(query.id, { text: `✅ Wallet W${walletIndex + 1} is now active!` });
+        bot.emit("callback_query", { ...query, data: "wallets" }); // Reload wallets menu
     } else if (data === "settings") {
         const settingsMenu = {
             reply_markup: {
@@ -105,6 +144,9 @@ bot.on("callback_query", async (query) => {
             let walletsMenu;
             let solanaWalletButtons = [];
 
+            const activeIndex = wallets[chatId].activeWallet || 0;  // Default to first wallet
+
+
             if ( wallets[chatId].length === 0) {
                 solanaText += "🚨 *No wallet found.*\nCreate one using the button below.\n\n";
                 walletsMenu = {
@@ -116,8 +158,16 @@ bot.on("callback_query", async (query) => {
                     }
                 };
             } else {
-                const balance = await checkWallet(Keypair.fromSecretKey(bs58.decode(wallets[chatId].privateKeyBase58)).publicKey, connection);
-                solanaText += `\`${wallets[chatId].publicKey}\`\n*Label:* W1 ✅\n*Balance:* ${balance.toFixed(4)} SOL\n\n`;
+                for (let i = 0; i < wallets[chatId].wallets.length; i++) {
+                    const userWallet = wallets[chatId].wallets[i];
+                    const publicKey = userWallet.publicKey;
+                    const balance = await checkWallet(publicKey, connection);
+
+                    const checkmark = (i === activeIndex) ? "✅" : "";  // Show ✅ for active wallet
+                    solanaText += `\`${publicKey}\`\n*Label:* W${i + 1} ${checkmark}\n*Balance:* ${balance.toFixed(4)} SOL\n\n`;
+
+                    solanaWalletButtons.push([{ text: `W${i + 1}`, callback_data: `set_active_wallet_${i}` }]);
+                }
             }
             walletsMenu = {
                 reply_markup: {
@@ -141,18 +191,23 @@ bot.on("callback_query", async (query) => {
             console.log("❌ Error fetching wallets." + error.message);
         }
     } else if(data === "create_wallet"){
-        if (wallets[chatId]) {
-            return bot.sendMessage(chatId, "🚨 You already have a wallet created.");
+        if (wallets[chatId].wallets.length >= 5) {
+            return bot.sendMessage(chatId, "🚨 You can only create up to 5 wallets.");
         }
 
         const newWallet = Keypair.generate();
         const privateKeyBase58 = bs58.encode(newWallet.secretKey);
-        const publicKey = newWallet.publicKey.toBase58();
+        const publicKey = newWallet.publicKey;
 
-        wallets[chatId] = { privateKeyBase58, publicKey };
+        // Assign a label based on the number of existing wallets
+        const walletCount = wallets[chatId].wallets.length + 1;
+        const walletLabel = `W${walletCount}`;
+
+        // Store the new wallet
+        wallets[chatId].wallets.push({ label: walletLabel, privateKeyBase58, publicKey });
         saveWallets();
 
-        bot.sendMessage(chatId, `✅ Wallet Created!\n\n🗝 *Public Key:* \`${publicKey}\`\n🔒 *Private Key:* [Stored Securely]`, { parse_mode: "Markdown" });
+        bot.sendMessage(chatId, `✅ *New Wallet Created!*\n\n🗝 *Public Key:* \`${publicKey}\`\n📛 *Label:* ${walletLabel}\n🔒 *Private Key:* [Stored Securely]`, { parse_mode: "Markdown" });
     } else if (data === "help") {
         bot.sendMessage(chatId, "❓ How can I help you?");
     } else if (data === "refresh") {
@@ -164,9 +219,27 @@ bot.on("callback_query", async (query) => {
         }
     
         try {
-            // Retrieve the user's wallet (or create a new one if first-time user)
-            const userWallet = getUserWallet(chatId);
-            const publicKey = Keypair.fromSecretKey(bs58.decode(userWallet)).publicKey;
+            // Ensure wallets exist for the user
+            if (!wallets[chatId] ||  wallets[chatId].wallets.length === 0) {
+                console.log(`Creating a new wallet for user: ${chatId}`);
+
+                const newWallet = Keypair.generate();
+                wallets[chatId] = {
+                    activeWallet: 0,  // Default first wallet as active
+                    wallets: [{
+                        label: "W1",
+                        privateKeyBase58: bs58.encode(newWallet.secretKey),
+                        publicKey: newWallet.publicKey
+                    }]
+                };
+
+                saveWallets();
+            }
+
+            // Get the active wallet
+            const activeIndex = wallets[chatId].activeWallet || 0;
+            const userWallet = wallets[chatId].wallets[activeIndex];
+            const publicKey = userWallet.publicKey;
     
             // Fetch balance
             const balance = await checkWallet(publicKey, connection);
@@ -212,9 +285,27 @@ bot.onText(/\/start/, async (msg) => {
     }
 
     try {
-        // Retrieve the user's wallet (or create a new one if first-time user)
-        const userWallet = getUserWallet(chatId);
-        const publicKey = Keypair.fromSecretKey(bs58.decode(userWallet)).publicKey;
+        // Ensure wallets exist for the user
+        if (!wallets[chatId] ||  wallets[chatId].wallets.length === 0) {
+            console.log(`Creating a new wallet for user: ${chatId}`);
+
+            const newWallet = Keypair.generate();
+            wallets[chatId] = {
+                activeWallet: 0,  // Default first wallet as active
+                wallets: [{
+                    label: "W1",
+                    privateKeyBase58: bs58.encode(newWallet.secretKey),
+                    publicKey: newWallet.publicKey
+                }]
+            };
+
+            saveWallets();
+        }
+
+        // Get the active wallet
+        const activeIndex = wallets[chatId].activeWallet || 0;
+        const userWallet = wallets[chatId].wallets[activeIndex];
+        const publicKey = userWallet.publicKey;
 
         // Fetch balance
         const balance = await checkWallet(publicKey, connection);

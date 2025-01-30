@@ -1,7 +1,11 @@
-const { LAMPORTS_PER_SOL } = require("@solana/web3.js");
+const { LAMPORTS_PER_SOL, Connection, PublicKey } = require("@solana/web3.js");
 
-async function checkWallet(publicKey, connection) {
+async function checkWallet(publicKeyString, connection) {
     try {
+        // Convert string publicKey to PublicKey object
+        const publicKey = new PublicKey(publicKeyString);
+
+        // Fetch balance
         const balanceLamports = await connection.getBalance(publicKey);
         return balanceLamports / LAMPORTS_PER_SOL; // Convert lamports to SOL
     } catch (error) {
@@ -11,3 +15,4 @@ async function checkWallet(publicKey, connection) {
 }
 
 module.exports = { checkWallet };
+
