@@ -1,15 +1,18 @@
 require('dotenv').config();
-const { default: axios } = require('axios');
+const axios = require("axios");
 const TelegramBot = require('node-telegram-bot-api');
-const { Connection, PublicKey, Keypair, LAMPORTS_PER_SOL } = require('@solana/web3.js');
+const { Connection, PublicKey, Keypair, LAMPORTS_PER_SOL, VersionedTransaction } = require('@solana/web3.js');
 const bs58 = require('bs58'); // Base58 encoding/decoding
 const { checkWallet } = require("./src/checkWallet.js"); 
+const {getQuote, getSwapInstructions, getSwapResponse} = require("./src/jupiterApi.js")
 const fs = require('fs');
 
 const allowedUsers= [1778595492];
 const bot = new TelegramBot(process.env.TELEGRAM_BOT_TOKEN, { polling: true });
 
 const connection = new Connection(process.env.HELIUS_RPC_URL);
+// Store user-specific buy data (custom SOL amount, slippage, token mint, etc.)
+const userBuyData = {}; 
 
 // Load existing wallets or create an empty object
 const WALLET_FILE = "wallets.json";
@@ -47,10 +50,157 @@ function getWalletKeypair(wallet) {
     return Keypair.fromSecretKey(bs58.decode(wallet.privateKeyBase58));
 }
 
+// Helper function to validate Solana token addresses
+function isValidSolanaAddress(address) {
+    try {
+        new PublicKey(address);
+        return true;
+    } catch (error) {
+        return false;
+    }
+}
+
+// Fetch token price from Jupiter API
+async function fetchTokenPrice(chatId, tokenMint) {
+    try {
+        // Ensure tokenMint is a valid Solana address
+        if (!isValidSolanaAddress(tokenMint)) {
+            return bot.sendMessage(chatId, "❌ Invalid token mint address. Please enter a correct Solana token address.");
+        }
+
+        // Fetch token price from Jupiter API
+        const response = await axios.get(`https://api.jup.ag/price/v2?ids=${tokenMint},${process.env.SOLANA_ADDRESS}`);
+
+        if (!response.data || !response.data.data[tokenMint]) {
+            return bot.sendMessage(chatId, "❌ Token not found on Jupiter. Please try a different token.");
+        }
+
+        // Fetch token informations from Jupiter API
+        const response2 = await axios.get(`https://api.jup.ag/tokens/v1/token/${tokenMint}`);
+
+        if (!response2.data || !response2.data.address === tokenMint) {
+            return bot.sendMessage(chatId, "❌ Token not found on Jupiter. Please try a different token.");
+        }
+
+        // Extract token details
+        const tokenData = response.data.data[tokenMint];
+        const tokenInformations = response2.data;
+        const price = tokenData.price || 0;
+        const liquidity = tokenData.liquidity || "N/A";
+        const marketCap = tokenData.marketCap || "N/A";
+
+        // Fetch the user's active wallet balance
+        const activeIndex = wallets[chatId].activeWallet || 0;
+        const userWallet = wallets[chatId].wallets[activeIndex];
+        const publicKey = userWallet.publicKey;
+        let solAmount = 0.001;
+        let slippage = 0.5;
+        const balance = await checkWallet(publicKey, connection);
+
+        // Show swap details
+        const priceImpact = (tokenData.priceImpact || 0) * 100;
+        const solToTokenRate = 1 / price;
+
+        let message = `🪙 *Token Found!*\n\n`;
+        message += `Buy *$${tokenInformations.symbol}*\n\`${tokenMint}\`\n`;
+        message += `💰 *SOL Amount:* ${solAmount} SOL\n`;
+        message += `🔄 *Slippage:* ${slippage}%\n`;
+        message += `📊 *Price:* $${price}\n`;
+        //message += `📊 *Price:* $${price} — LIQ: *$${liquidity}* — MC: *$${marketCap}\n`;
+        message += `⚖️ *${solAmount} SOL → ${solToTokenRate.toFixed(2)} ${tokenData.mint}*\n`;
+        //message += `📉 *Price Impact:* ${priceImpact.toFixed(2)}%\n`;
+
+        // Store the custom amount for this user
+        if (!userBuyData[chatId]) userBuyData[chatId] = {};
+        userBuyData[chatId].tokenMint = tokenMint;
+        userBuyData[chatId].tokenSymbol = tokenInformations.symbol;
+        userBuyData[chatId].solAmount = solAmount; // Default to 0.5 SOL
+        userBuyData[chatId].slippage = slippage; // Default to 0.5%
+
+        // message += `📉 *Bonding Curve Progression:* 0.15%\n`;
+        // message += `⚖️ *1 SOL → ${solToTokenRate.toFixed(2)} ${tokenData.mint}* ($${(1 * price).toFixed(2)})\n`;
+        // message += `📉 *Price Impact:* ${priceImpact.toFix
+
+        // Rebuild the buy menu with updated values
+        const buyMenu = {
+            reply_markup: {
+                inline_keyboard: [
+                    [{ text: `✅ W${activeIndex + 1}`, callback_data: "active_wallet" }],
+                    [{ text: "✏️ Custom SOL", callback_data: "custom_sol" }, { text: `✅ ${solAmount} SOL`, callback_data: "set_sol" }],
+                    [{ text: "✏️ Custom Slippage", callback_data: "custom_slippage" }, { text: `✅ ${slippage}%`, callback_data: "set_slippage" }],
+                    [{ text: "✅ BUY", callback_data: `confirm_buy_${tokenMint}` }],
+                    [{ text: "⬅️ Back", callback_data: "wallets" }, { text: "🔄 Refresh", callback_data: `fetchTokenPrice_${tokenMint}` }]
+                ]
+            }
+        };
+
+        bot.sendMessage(chatId, message, { parse_mode: "Markdown", ...buyMenu });
+
+    } catch (error) {
+        console.error("❌ Error fetching token price:", error);
+        bot.sendMessage(chatId, "❌ Failed to fetch token price. Please try again later.");
+    }
+}
+
+async function refreshBuyWindow(chatId, messageId) {
+    if (!userBuyData[chatId] || !userBuyData[chatId].tokenMint) {
+        return bot.sendMessage(chatId, "❌ No token selected. Please enter a token mint first.");
+    }
+
+    const tokenMint = userBuyData[chatId].tokenMint;
+    const solAmount = userBuyData[chatId].solAmount || 0.5; // Default to 0.5 SOL
+    const slippage = userBuyData[chatId].slippage || 0.5; // Default to 0.5%
+
+    // Fetch token price again
+    const response = await axios.get(`https://api.jup.ag/price/v2?ids=${tokenMint},${process.env.SOLANA_ADDRESS}`);
+    if (!response.data || !response.data.data[tokenMint]) {
+        return bot.sendMessage(chatId, "❌ Token not found on Jupiter. Please try again.");
+    }
+
+    const activeIndex = wallets[chatId].activeWallet || 0;
+    const tokenData = response.data.data[tokenMint];
+    const price = tokenData.price || 0;
+    const solToTokenRate = solAmount / price;
+    const priceImpact = (tokenData.priceImpact || 0) * 100;
+
+    let message = `🪙 *Token Found!*\n\n`;
+    message += `Buy *$${tokenData.symbol}*\n\`${tokenMint}\`\n`;
+    message += `💰 *SOL Amount:* ${solAmount} SOL\n`;
+    message += `🔄 *Slippage:* ${slippage}%\n`;
+    message += `📊 *Price:* $${price}\n`;
+    message += `⚖️ *${solAmount} SOL → ${solToTokenRate.toFixed(2)} ${tokenData.mint}*\n`;
+    message += `📉 *Price Impact:* ${priceImpact.toFixed(2)}%\n`;
+
+    // Rebuild the buy menu with updated values
+    const buyMenu = {
+        reply_markup: {
+            inline_keyboard: [
+                [{ text: `✅ W${activeIndex + 1}`, callback_data: "active_wallet" }],
+                [{ text: "✏️ Custom SOL", callback_data: "custom_sol" }, { text: `✅ ${solAmount} SOL`, callback_data: "set_sol" }],
+                [{ text: "✏️ Custom Slippage", callback_data: "custom_slippage" }, { text: `✅ ${slippage}%`, callback_data: "set_slippage" }],
+                [{ text: "✅ BUY", callback_data: `confirm_buy_${tokenMint}` }],
+                [{ text: "⬅️ Back", callback_data: "wallets" }, { text: "🔄 Refresh", callback_data: `fetchTokenPrice_${tokenMint}` }]
+            ]
+        }
+    };
+
+    // Update the existing message instead of sending a new one
+    bot.editMessageText(message, {
+        chat_id: chatId,
+        message_id: messageId,
+        parse_mode: "Markdown",
+        ...buyMenu
+    });
+}
+
+
 bot.on("callback_query", async (query) => {
     const chatId = query.message.chat.id;
     const messageId = query.message.message_id; // Get message ID to edit
     const data = query.data;
+
+    // Acknowledge the callback immediately to prevent Telegram from resending it
+    bot.answerCallbackQuery(query.id);
 
     if (!allowedUsers.includes(chatId)) {
         return bot.sendMessage(chatId, "🚫 Access denied. You are not authorized to use this bot.");
@@ -62,13 +212,166 @@ bot.on("callback_query", async (query) => {
         }
     
         const activeIndex = wallets[chatId].activeWallet || 0; // Default to W1
+
+        // Ensure active wallet is valid
+        if (activeIndex === undefined || activeIndex < 0 || activeIndex >= wallets[chatId].wallets.length) {
+            return bot.sendMessage(chatId, "🚨 You need to select an active wallet first. Go to /wallets and choose one.");
+        }
+
+        bot.sendMessage(chatId, "💰 Enter a token symbol or address to buy:");
+
+        // Step 2: Capture user's response (next message)
+        bot.once("message", async (msg) => {
+            const tokenInput = msg.text.trim();
+
+            // Validate input
+            if (!isValidSolanaAddress(tokenInput) && tokenInput.length > 10) {
+                return bot.sendMessage(chatId, "❌ Invalid token address. Please enter a correct Solana token address or symbol.");
+            }
+
+            // Proceed to fetch price
+            const tokenSymbol = tokenInput;
+            await fetchTokenPrice(chatId, tokenSymbol);
+        });
+    } else if (data === "custom_sol"){
+        bot.sendMessage(chatId, "💰 Enter the amount of SOL you want to use for the trade:");
+
+        bot.once("message", async (msg) => {
+            const solAmount = parseFloat(msg.text.trim());
+
+            if (isNaN(solAmount) || solAmount <= 0) {
+                return bot.sendMessage(chatId, "❌ Invalid SOL amount. Please enter a positive number.");
+            }
+
+            // Store the custom amount for this user
+            if (!userBuyData[chatId]) userBuyData[chatId] = {};
+            userBuyData[chatId].solAmount = solAmount;
+
+            // Refresh the buy window with updated values
+            refreshBuyWindow(chatId, messageId);
+        });
+    } else if(data === "custom_slippage"){
+        bot.sendMessage(chatId, "🔄 Enter your preferred slippage percentage (e.g., 0.5 for 0.5%):");
+
+        bot.once("message", async (msg) => {
+            const slippage = parseFloat(msg.text.trim());
+
+            if (isNaN(slippage) || slippage <= 0 || slippage > 100) {
+                return bot.sendMessage(chatId, "❌ Invalid slippage. Please enter a number between 0.1 and 100.");
+            }
+
+            // Store the custom slippage for this user
+            if (!userBuyData[chatId]) userBuyData[chatId] = {};
+            userBuyData[chatId].slippage = slippage;
+
+            // Refresh the buy window with updated values
+            refreshBuyWindow(chatId, messageId);
+        });
+    } else if (data.startsWith("confirm_buy_")){
+        const outputMint = data.split("_")[2]; // Extract token mint
+        const inputMint = process.env.SOLANA_ADDRESS;
+        // Ensure userBuyData[chatId] exists
+        if (!userBuyData[chatId]) userBuyData[chatId] = {};
+
+        // Set default values if they are missing
+        const solAmount = userBuyData[chatId].solAmount || 0.001;
+        const slippage = userBuyData[chatId].slippage || 50;
+        const adjustedAmount = Math.floor(solAmount * LAMPORTS_PER_SOL); // Convert to lamports
+        const adjustedSlippage = slippage * 100;
+        //adjustedAmount = amount * Math.pow(10, inputTokenInfo.decimals);
+
+        // Get Active Wallet
+        const activeIndex = wallets[chatId].activeWallet || 0;
         const userWallet = wallets[chatId].wallets[activeIndex];
-        const publicKey = userWallet.publicKey;
-    
-        bot.sendMessage(chatId, `💰 *You are using Wallet ${activeIndex + 1}*\n🗝 Public Key: \`${publicKey}\`\n\nEnter the amount you want to buy:`, {
+        const publicKey = new PublicKey(userWallet.publicKey);
+        const keypair = Keypair.fromSecretKey(bs58.decode(userWallet.privateKeyBase58));
+
+        bot.sendMessage(chatId, `🔄 *Processing Buy Order*\n\n💰 SOL Amount: *${solAmount}*\n🔄 Slippage: *${slippage}%*\n\nFetching the best swap route and process the swap...`, {
             parse_mode: "Markdown"
         });
-        bot.sendMessage(chatId, "💰 Enter the amount you want to buy:");
+
+        try {
+            // 1. Get quote from Jupiter
+            console.log("💰 Getting quote from Jupiter...");
+            const quoteResponse = await getQuote(
+                inputMint,
+                outputMint,
+                adjustedAmount,
+                adjustedSlippage
+            );
+        
+            if (!quoteResponse || !quoteResponse.routePlan) {
+                return bot.sendMessage(chatId, "❌ No trading routes found. Please try again.");
+            }
+        
+            console.log("🔄 Quote received. Fetching swap instructions...");
+        
+            // 2. Get swap instructions
+            const swapResponse = await getSwapResponse(
+                quoteResponse,
+                publicKey.toString()
+            );
+        
+            if (!swapResponse || swapResponse.error) {
+                return bot.sendMessage(chatId, "❌ Failed to get swap instructions. Please try again.");
+            }
+        
+            console.log("📜 Swap instructions received. Preparing transaction...");
+        
+            // 3. Prepare Transaction
+            const transactionBase64 = swapResponse.swapTransaction;
+            const transaction = VersionedTransaction.deserialize(Buffer.from(transactionBase64, "base64"));
+        
+            // 4. SIMULATE TRANSACTION BEFORE EXECUTION
+            console.log("🔍 Simulating transaction...");
+            const simulationResult = await connection.simulateTransaction(transaction);
+        
+            if (simulationResult.value.err) {
+                return bot.sendMessage(chatId, `⚠️ Simulation Failed: ${JSON.stringify(simulationResult.value.err)}\n❌ Swap will not proceed.`, {
+                    parse_mode: "Markdown",
+                });
+            } else {
+                bot.sendMessage(chatId, `✅ *Simulation Successful!*\n\n🔹 Estimated Fees: ${simulationResult.value.fee || "N/A"} lamports\n🔹 Will proceed with swap execution.`, {
+                    parse_mode: "Markdown",
+                });
+            }
+        
+            // 5. Sign Transaction
+            console.log("✍️ Signing transaction...");
+            transaction.sign([keypair]);
+        
+            // 6. Send Transaction
+            console.log("🚀 Sending transaction...");
+            const transactionBinary = transaction.serialize();
+            const signature = await connection.sendRawTransaction(transactionBinary, {
+                maxRetries: 2,
+                skipPreflight: true,
+            });
+        
+            console.log(`✅ Transaction sent: ${signature}`);
+        
+            // 7. Confirm Transaction
+            const confirmation = await connection.confirmTransaction(signature, "finalized");
+        
+            if (confirmation.value && confirmation.value.err) {
+                return bot.sendMessage(chatId, `❌ Transaction failed: ${JSON.stringify(confirmation.value.err)}\n🔗 [View on Solscan](https://solscan.io/tx/${signature}/)`, {
+                    parse_mode: "Markdown",
+                });
+            } else {
+                bot.sendMessage(chatId, `✅ Transaction successful!\n🔗 [View on Solscan](https://solscan.io/tx/${signature}/)`, {
+                    parse_mode: "Markdown",
+                });
+            }
+        
+        } catch (error) {
+            console.error("❌ Swap Error:", error);
+            bot.sendMessage(chatId, "❌ Swap failed. Please try again.");
+        }
+        
+        
+        delete userBuyData[chatId];
+
+
     } else if (data === "sell") {
         if (!wallets[chatId] || !wallets[chatId].wallets || wallets[chatId].wallets.length === 0) {
             return bot.sendMessage(chatId, "🚨 You need to create a wallet first.");
@@ -164,7 +467,7 @@ bot.on("callback_query", async (query) => {
                     const balance = await checkWallet(publicKey, connection);
 
                     const checkmark = (i === activeIndex) ? "✅" : "";  // Show ✅ for active wallet
-                    solanaText += `\`${publicKey}\`\n*Label:* W${i + 1} ${checkmark}\n*Balance:* ${balance.toFixed(4)} SOL\n\n`;
+                    solanaText += `\`${publicKey}\`\n*Label:* W${i + 1} ${checkmark}\n*Balance:* ${balance.toFixed(2)} SOL\n\n`;
 
                     solanaWalletButtons.push([{ text: `W${i + 1}`, callback_data: `set_active_wallet_${i}` }]);
                 }
