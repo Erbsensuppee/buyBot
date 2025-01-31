@@ -6,6 +6,8 @@ const bs58 = require('bs58'); // Base58 encoding/decoding
 const { checkWallet } = require("./src/checkWallet.js"); 
 const {getQuote, getSwapInstructions, getSwapResponse} = require("./src/jupiterApi.js")
 const fs = require('fs');
+const { getAccount } = require("@solana/spl-token");
+
 
 const allowedUsers= [1778595492];
 const bot = new TelegramBot(process.env.TELEGRAM_BOT_TOKEN, { polling: true });
@@ -13,6 +15,7 @@ const bot = new TelegramBot(process.env.TELEGRAM_BOT_TOKEN, { polling: true });
 const connection = new Connection(process.env.HELIUS_RPC_URL);
 // Store user-specific buy data (custom SOL amount, slippage, token mint, etc.)
 const userBuyData = {}; 
+const userSellData = {};
 
 // Load existing wallets or create an empty object
 const WALLET_FILE = "wallets.json";
@@ -142,6 +145,115 @@ async function fetchTokenPrice(chatId, tokenMint) {
     }
 }
 
+async function fetchSellPrice(chatId, tokenMint) {
+    try {
+        // Ensure tokenMint is a valid Solana address
+        if (!isValidSolanaAddress(tokenMint)) {
+            return bot.sendMessage(chatId, "❌ Invalid token mint address. Please enter a correct Solana token address.");
+        }
+
+        // Fetch token price from Jupiter API (Reverse: token → SOL)
+        const response = await axios.get(`https://api.jup.ag/price/v2?ids=${tokenMint},${process.env.SOLANA_ADDRESS}`);
+
+        if (!response.data || !response.data.data[tokenMint]) {
+            return bot.sendMessage(chatId, "❌ Token not found on Jupiter. Please try a different token.");
+        }
+
+        // Fetch token details from Jupiter API
+        const response2 = await axios.get(`https://api.jup.ag/tokens/v1/token/${tokenMint}`);
+
+        if (!response2.data || response2.data.address !== tokenMint) {
+            return bot.sendMessage(chatId, "❌ Token not found on Jupiter. Please try a different token.");
+        }
+
+        // Extract token details
+        const tokenData = response.data.data[tokenMint];
+        const tokenInformations = response2.data;
+        const price = tokenData.price || 0;
+
+        // Fetch the user's active wallet balance
+        const activeIndex = wallets[chatId].activeWallet || 0;
+        const userWallet = wallets[chatId].wallets[activeIndex];
+        const publicKey = userWallet.publicKey;
+
+        // Fetch user's token balance
+        const tokenAccounts = await connection.getParsedTokenAccountsByOwner(
+            new PublicKey(publicKey),
+            { mint: new PublicKey(tokenMint) }
+        );
+
+        if (!tokenAccounts.value.length) {
+            return bot.sendMessage(chatId, "❌ No balance available for this token.");
+        }
+        const tokenAccount = tokenAccounts.value[0].pubkey;
+        const accountInfo = await getAccount(connection, tokenAccount);
+        const tmpSellAmount = Number(accountInfo.amount);
+
+        const tokenBalance = tokenAccounts.value[0].account.data.parsed.info.tokenAmount.uiAmount;
+        const slippage = userSellData[chatId]?.slippage || 0.5;
+        const selectedPercentage = userSellData[chatId]?.selectedPercentage || 0; // Default: No selection
+
+        // Calculate estimated SOL received for different percentages
+        const percentages = [0, 25, 50, 75, 100];
+        const estimatedAmounts = percentages.map(pct => ({
+            pct,
+            amount: (tmpSellAmount * pct) / 100,
+            humanAmount: (tokenBalance * pct) /100,
+            estimatedSol: ((tokenBalance * pct) / 100) * price,
+            isSelected: pct === selectedPercentage // Check if this is the selected one
+        }));
+
+        // Find the selected percentage's amount
+        const selectedAmount = estimatedAmounts.find(item => item.pct === selectedPercentage)?.amount || 0;
+        const selectedHumanAmount = estimatedAmounts.find(item => item.pct === selectedPercentage)?.humanAmount || 0;
+
+        // Store the token info for this user
+        if (!userSellData[chatId]) userSellData[chatId] = {};
+        userSellData[chatId].tokenMint = tokenMint;
+        userSellData[chatId].tokenSymbol = tokenInformations.symbol;
+        userSellData[chatId].tokenBalance = tokenBalance;
+        userSellData[chatId].slippage = slippage;
+        userSellData[chatId].sellTokenAmount = selectedAmount;
+
+        let message = `🪙 *Token Found!*\n\n`;
+        message += `Sell *$${tokenInformations.symbol}*\n\`${tokenMint}\`\n`;
+        message += `💰 *Balance:* ${tokenBalance.toFixed(4)} ${tokenInformations.symbol}\n`;
+        message += `🔄 *Slippage:* ${slippage}%\n`;
+        message += `📊 *Price:* $${price}\n`;
+        message += `*Sell Token Amount:* ${selectedHumanAmount}`;
+
+
+        // Build sell menu with percentage options
+        const sellMenu = {
+            reply_markup: {
+                inline_keyboard: [
+                    [{ text: `✅ W${activeIndex + 1}`, callback_data: "active_wallet" }],
+                    [
+                        { text: `${selectedPercentage === 25 ? "✅" : "🔹"} 25%`, callback_data: `pct_sell__25_${tokenMint}` },
+                        { text: `${selectedPercentage === 50 ? "✅" : "🔹"} 50%`, callback_data: `pct_sell__50_${tokenMint}` }
+                    ],
+                    [
+                        { text: `${selectedPercentage === 75 ? "✅" : "🔹"} 75%`, callback_data: `pct_sell__75_${tokenMint}` },
+                        { text: `${selectedPercentage === 100 ? "✅" : "🔹"} 100%`, callback_data: `pct_sell__100_${tokenMint}` }
+                    ],
+                    [{ text: "✏️ Custom Slippage", callback_data: "custom_sell_slippage" }, { text: `✅ ${slippage}%`, callback_data: "set_sell_slippage" }],
+                    [{ text: "✅ SELL", callback_data: `confirm_sell_${tokenMint}` }],
+                    [{ text: "⬅️ Back", callback_data: "wallets" }, { text: "🔄 Refresh", callback_data: `fetchSellPrice_${tokenMint}` }]
+                ]
+            }
+        };
+
+        bot.sendMessage(chatId, message, { parse_mode: "Markdown", ...sellMenu });
+
+    } catch (error) {
+        console.error("❌ Error fetching token price:", error);
+        bot.sendMessage(chatId, "❌ Failed to fetch token price. Please try again later.");
+    }
+}
+
+
+
+
 async function refreshBuyWindow(chatId, messageId) {
     if (!userBuyData[chatId] || !userBuyData[chatId].tokenMint) {
         return bot.sendMessage(chatId, "❌ No token selected. Please enter a token mint first.");
@@ -192,6 +304,82 @@ async function refreshBuyWindow(chatId, messageId) {
         ...buyMenu
     });
 }
+
+async function getUserTokens(chatId, publicKey) {
+    try {
+        // Fetch all tokens owned by the user
+        const tokenAccounts = await connection.getParsedTokenAccountsByOwner(
+            new PublicKey(publicKey),
+            { programId: new PublicKey("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA") }
+        );
+
+        const tokens = [];
+
+        for (const account of tokenAccounts.value) {
+            const mintAddress = account.account.data.parsed.info.mint;
+            const balance = account.account.data.parsed.info.tokenAmount.uiAmount;
+             // Fetch token informations from Jupiter API
+            const response2 = await axios.get(`https://api.jup.ag/tokens/v1/token/${mintAddress}`);
+
+            if (!response2.data || !response2.data.address === mintAddress) {
+                return bot.sendMessage(chatId, "❌ Token not found on Jupiter. Please try a different token.");
+            }
+
+            if (balance > 0) {
+                tokens.push({
+                    symbol: response2.data.symbol,
+                    mint: mintAddress,
+                    balance,
+                });
+            }
+        }
+
+        return tokens;
+    } catch (error) {
+        console.error("❌ Error fetching user tokens:", error);
+        return [];
+    }
+}
+
+async function showSellMenu(chatId) {
+    try {
+        // Fetch active wallet
+        const activeIndex = wallets[chatId].activeWallet || 0;
+        const userWallet = wallets[chatId].wallets[activeIndex];
+        const publicKey = userWallet.publicKey;
+
+        // Fetch user's tokens
+        const tokens = await getUserTokens(chatId, publicKey);
+
+        if (tokens.length === 0) {
+            return bot.sendMessage(chatId, "❌ No tokens available to sell.");
+        }
+
+        let message = `🛒 *Select a token to sell* (${tokens.length}/${tokens.length})\n`;
+        message += `💰 *Balance:* ${await checkWallet(publicKey, connection)} SOL\n\n`;
+
+        // Create inline buttons for each token
+        const buttons = tokens.map(token => [
+            { text: `${token.symbol}`, callback_data: `sell_${token.mint}` }
+        ]);
+
+        // Add navigation buttons
+        buttons.push([{ text: "⬅️ Back", callback_data: "main_menu" }, { text: "🔄 Refresh", callback_data: "sell_menu" }]);
+
+        const sellMenu = {
+            reply_markup: {
+                inline_keyboard: buttons
+            }
+        };
+
+        bot.sendMessage(chatId, message, { parse_mode: "Markdown", ...sellMenu });
+
+    } catch (error) {
+        console.error("❌ Error showing sell menu:", error);
+        bot.sendMessage(chatId, "❌ Failed to fetch sellable tokens.");
+    }
+}
+
 
 
 bot.on("callback_query", async (query) => {
@@ -381,10 +569,158 @@ bot.on("callback_query", async (query) => {
         const userWallet = wallets[chatId].wallets[activeIndex];
         const publicKey = userWallet.publicKey;
     
-        bot.sendMessage(chatId, `💰 *You are using Wallet ${activeIndex + 1}*\n🗝 Public Key: \`${publicKey}\`\n\nEnter the amount you want to sell"}:`, {
+        showSellMenu(chatId);
+    } else if (data.startsWith("sell_")) {
+        const tokenMint = data.split("_")[1]; // Extract token mint
+    
+        console.log(`🔹 User selected to sell token: ${tokenMint}`);
+    
+        // Fetch sell price and show UI
+        fetchSellPrice(chatId, tokenMint);
+    } else if (data.startsWith("pct_sell_")) {
+        const parts = data.split("_").filter(part => part !== ""); // Remove empty parts caused by "__"
+        
+        if (parts.length < 3) {
+            return bot.sendMessage(chatId, "❌ Invalid selection data. Please try again.");
+        }
+    
+        const percentage = parseInt(parts[2]); // Correctly extract percentage
+        const tokenMint = parts.slice(3).join("_"); // Correctly extract tokenMint
+    
+        console.log(`🔹 User selected to sell ${percentage}% of token: ${tokenMint}`);
+    
+        if (!userSellData[chatId] || userSellData[chatId].tokenMint !== tokenMint) {
+            return bot.sendMessage(chatId, "❌ Token data missing. Please try again.");
+        }
+    
+        // Store the selected percentage
+        userSellData[chatId].selectedPercentage = percentage;
+        userSellData[chatId].sellAmount = (userSellData[chatId].tokenBalance * percentage) / 100;
+    
+        // Refresh UI with updated selection
+        fetchSellPrice(chatId, tokenMint);
+    } else if (data === "custom_sell_slippage") {
+        bot.sendMessage(chatId, "🔄 *Enter your preferred slippage percentage (e.g., 0.5 for 0.5%):*", { parse_mode: "Markdown" });
+
+        bot.once("message", async (msg) => {
+            const slippage = parseFloat(msg.text.trim());
+
+            if (isNaN(slippage) || slippage <= 0 || slippage > 100) {
+                return bot.sendMessage(chatId, "❌ Invalid slippage. Please enter a number between 0.1 and 100.");
+            }
+
+            // Store new slippage
+            if (!userSellData[chatId]) userSellData[chatId] = {};
+            userSellData[chatId].slippage = slippage;
+
+            // Refresh UI
+            fetchSellPrice(chatId, userSellData[chatId].tokenMint);
+        });
+    }
+    else if (data.startsWith("confirm_sell_")){
+        const inputMint = data.split("_")[2]; // Extract token mint
+        const outputMint = process.env.SOLANA_ADDRESS;
+        // Ensure userBuyData[chatId] exists
+        if (!userSellData[chatId]) userSellData[chatId] = {};
+
+        // Set default values if they are missing
+        const tokenAmount = userSellData[chatId].sellTokenAmount || 0.001;
+        const slippage = userSellData[chatId].slippage || 50;
+        const adjustedSlippage = slippage * 100;
+        //adjustedAmount = amount * Math.pow(10, inputTokenInfo.decimals);
+
+        // Get Active Wallet
+        const activeIndex = wallets[chatId].activeWallet || 0;
+        const userWallet = wallets[chatId].wallets[activeIndex];
+        const publicKey = new PublicKey(userWallet.publicKey);
+        const keypair = Keypair.fromSecretKey(bs58.decode(userWallet.privateKeyBase58));
+
+        bot.sendMessage(chatId, `🔄 *Processing SELL Order*\n\n💰 Token Amount: *${tokenAmount}*\n🔄 Slippage: *${slippage}%*\n\nFetching the best swap route and process the swap...`, {
             parse_mode: "Markdown"
         });
-        bot.sendMessage(chatId, "📉 Enter the amount you want to sell:");
+
+        try {
+            // 1. Get quote from Jupiter
+            console.log("💰 Getting quote from Jupiter...");
+            const quoteResponse = await getQuote(
+                inputMint,
+                outputMint,
+                tokenAmount,
+                adjustedSlippage
+            );
+        
+            if (!quoteResponse || !quoteResponse.routePlan) {
+                return bot.sendMessage(chatId, "❌ No trading routes found. Please try again.");
+            }
+        
+            console.log("🔄 SELL Quote received. Fetching swap instructions...");
+        
+            // 2. Get swap instructions
+            const swapResponse = await getSwapResponse(
+                quoteResponse,
+                publicKey.toString()
+            );
+        
+            if (!swapResponse || swapResponse.error) {
+                return bot.sendMessage(chatId, "❌ Failed to get swap instructions. Please try again.");
+            }
+        
+            console.log("📜 SELL Swap instructions received. Preparing transaction...");
+        
+            // 3. Prepare Transaction
+            const transactionBase64 = swapResponse.swapTransaction;
+            const transaction = VersionedTransaction.deserialize(Buffer.from(transactionBase64, "base64"));
+        
+            // 4. SIMULATE TRANSACTION BEFORE EXECUTION
+            console.log("🔍 SELL Simulating transaction...");
+            const simulationResult = await connection.simulateTransaction(transaction);
+        
+            if (simulationResult.value.err) {
+                return bot.sendMessage(chatId, `⚠️ SELL Simulation Failed: ${JSON.stringify(simulationResult.value.err)}\n❌ Swap will not proceed.`, {
+                    parse_mode: "Markdown",
+                });
+            } else {
+                bot.sendMessage(chatId, `✅ *SELL Simulation Successful!*\n\n🔹 Estimated Fees: ${simulationResult.value.fee || "N/A"} lamports\n🔹 Will proceed with swap execution.`, {
+                    parse_mode: "Markdown",
+                });
+            }
+        
+            // 5. Sign Transaction
+            console.log("✍️ Signing transaction...");
+            transaction.sign([keypair]);
+        
+            // 6. Send Transaction
+            console.log("🚀 Sending transaction...");
+            const transactionBinary = transaction.serialize();
+            const signature = await connection.sendRawTransaction(transactionBinary, {
+                maxRetries: 2,
+                skipPreflight: true,
+            });
+        
+            console.log(`✅ Transaction sent: ${signature}`);
+        
+            // 7. Confirm Transaction
+            const confirmation = await connection.confirmTransaction(signature, "finalized");
+        
+            if (confirmation.value && confirmation.value.err) {
+                return bot.sendMessage(chatId, `❌ SELL Transaction failed: ${JSON.stringify(confirmation.value.err)}\n🔗 [View on Solscan](https://solscan.io/tx/${signature}/)`, {
+                    parse_mode: "Markdown",
+                });
+            } else {
+                bot.sendMessage(chatId, `✅ SELL Transaction successful!\n🔗 [View on Solscan](https://solscan.io/tx/${signature}/)`, {
+                    parse_mode: "Markdown",
+                });
+            }
+        
+        } catch (error) {
+            console.error("❌ SELL Swap Error:", error);
+            bot.sendMessage(chatId, "❌ SELL Swap failed. Please try again.");
+        }
+        
+        
+        delete userBuyData[chatId];
+
+
     } else if (data === "positions") {
         bot.sendMessage(chatId, "🔎 Fetching your open positions...");
     } else if (data === "limit_orders") {
