@@ -11,7 +11,7 @@ const { getAddressLookupTableAccounts, simulateTransaction, getAveragePriorityFe
 const { createJitoBundle, sendJitoBundle, bundleSignature, checkBundleStatus } = require("./src/jitoService.js")
 
 
-const allowedUsers= [1778595492];
+const allowedUsers = process.env.ALLOWED_USERS ? process.env.ALLOWED_USERS.split(',').map(Number) : [];
 const bot = new TelegramBot(process.env.TELEGRAM_BOT_TOKEN, { polling: true });
 
 const connection = new Connection(process.env.HELIUS_RPC_URL);
