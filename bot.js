@@ -7,6 +7,8 @@ const { checkWallet } = require("./src/checkWallet.js");
 const {getQuote, getSwapInstructions, getSwapResponse} = require("./src/jupiterApi.js")
 const fs = require('fs');
 const { getAccount } = require("@solana/spl-token");
+const { getAddressLookupTableAccounts, simulateTransaction, getAveragePriorityFee, createVersionedTransaction, deserializeInstruction } = require("./src/utils.js")
+const { createJitoBundle, sendJitoBundle, bundleSignature, checkBundleStatus } = require("./src/jitoService.js")
 
 
 const allowedUsers= [1778595492];
@@ -380,6 +382,29 @@ async function showSellMenu(chatId) {
     }
 }
 
+bot.on('message', async (msg) => {
+    const chatId = msg.chat.id;
+    const text = msg.text.trim();
+
+    // Ignore commands (messages that start with "/")
+    if (text.startsWith("/")) {
+        return;
+    }
+
+    // Check if the text is a valid Solana token mint address
+    if (isValidSolanaAddress(text)) {
+        console.log(`🪙 User sent a token mint address: ${text}`);
+        
+        try {
+            // Fetch token price and show buy menu
+            await fetchTokenPrice(chatId, text);
+        } catch (error) {
+            console.error("❌ Error fetching token price:", error.message);
+        }
+    }
+});
+
+
 
 
 bot.on("callback_query", async (query) => {
@@ -388,7 +413,7 @@ bot.on("callback_query", async (query) => {
     const data = query.data;
 
     // Acknowledge the callback immediately to prevent Telegram from resending it
-    bot.answerCallbackQuery(query.id);
+    bot.answerCallbackQuery(query.id, { text: "⏳ Processing...", show_alert: false });
 
     if (!allowedUsers.includes(chatId)) {
         return bot.sendMessage(chatId, "🚫 Access denied. You are not authorized to use this bot.");
@@ -474,10 +499,6 @@ bot.on("callback_query", async (query) => {
         const publicKey = new PublicKey(userWallet.publicKey);
         const keypair = Keypair.fromSecretKey(bs58.decode(userWallet.privateKeyBase58));
 
-        bot.sendMessage(chatId, `🔄 *Processing Buy Order*\n\n💰 SOL Amount: *${solAmount}*\n🔄 Slippage: *${slippage}%*\n\nFetching the best swap route and process the swap...`, {
-            parse_mode: "Markdown"
-        });
-
         try {
             // 1. Get quote from Jupiter
             console.log("💰 Getting quote from Jupiter...");
@@ -495,60 +516,140 @@ bot.on("callback_query", async (query) => {
             console.log("🔄 Quote received. Fetching swap instructions...");
         
             // 2. Get swap instructions
-            const swapResponse = await getSwapResponse(
+            const swapInstructions = await getSwapInstructions(
                 quoteResponse,
                 publicKey.toString()
             );
         
-            if (!swapResponse || swapResponse.error) {
+            if (!swapInstructions || swapInstructions.error) {
                 return bot.sendMessage(chatId, "❌ Failed to get swap instructions. Please try again.");
             }
         
             console.log("📜 Swap instructions received. Preparing transaction...");
         
             // 3. Prepare Transaction
-            const transactionBase64 = swapResponse.swapTransaction;
-            const transaction = VersionedTransaction.deserialize(Buffer.from(transactionBase64, "base64"));
+            const {
+                setupInstructions,
+                swapInstruction: swapInstructionPayload,
+                cleanupInstruction,
+                addressLookupTableAddresses,
+            } = swapInstructions;
         
-            // 4. SIMULATE TRANSACTION BEFORE EXECUTION
-            console.log("🔍 Simulating transaction...");
-            const simulationResult = await connection.simulateTransaction(transaction);
+            const swapInstruction = deserializeInstruction(swapInstructionPayload);
+            
+            const addressLookupTableAccounts = await getAddressLookupTableAccounts(
+                addressLookupTableAddresses,
+                connection
+            );
+
+            const latestBlockhash = await connection.getLatestBlockhash("finalized");
+
+            // 4. Simulate transaction to get compute units
+            const instructions = [
+                ...setupInstructions.map(deserializeInstruction),
+                swapInstruction,
+            ];
         
-            if (simulationResult.value.err) {
-                return bot.sendMessage(chatId, `⚠️ Simulation Failed: ${JSON.stringify(simulationResult.value.err)}\n❌ Swap will not proceed.`, {
+            if (cleanupInstruction) {
+                instructions.push(deserializeInstruction(cleanupInstruction));
+            }
+        
+            const computeUnits = await simulateTransaction(
+                instructions,
+                keypair.publicKey,
+                addressLookupTableAccounts,
+                2,
+                connection
+              );
+
+            if (computeUnits === undefined) {
+                return bot.sendMessage(chatId, `⚠️ Simulation Failed \n❌ Swap will not proceed.`, {
+                    parse_mode: "Markdown",
+                });
+            } else if(computeUnits && computeUnits.error === "InsufficientFundsForRent") {
+                console.log("❌ Insufficient funds for rent. Skipping this swap.");
+                return bot.sendMessage(chatId, `❌ Insufficient funds for rent. Skipping this swap."`, {
                     parse_mode: "Markdown",
                 });
             } else {
-                bot.sendMessage(chatId, `✅ *Simulation Successful!*\n\n🔹 Estimated Fees: ${simulationResult.value.fee || "N/A"} lamports\n🔹 Will proceed with swap execution.`, {
+                bot.sendMessage(chatId, `✅ *Simulation Successful!*\n\n🔹}🔹 Will proceed with swap execution.`, {
                     parse_mode: "Markdown",
                 });
             }
         
-            // 5. Sign Transaction
+            const priorityFee = await getAveragePriorityFee(connection);
+
+            // 5. Create versioned transaction
+            const transaction = createVersionedTransaction(
+                instructions,
+                keypair.publicKey,
+                addressLookupTableAccounts,
+                latestBlockhash.blockhash,
+                computeUnits,
+                priorityFee
+            );
+        
             console.log("✍️ Signing transaction...");
+            // 6. Sign the transaction
             transaction.sign([keypair]);
         
-            // 6. Send Transaction
-            console.log("🚀 Sending transaction...");
-            const transactionBinary = transaction.serialize();
-            const signature = await connection.sendRawTransaction(transactionBinary, {
-                maxRetries: 2,
-                skipPreflight: true,
-            });
-        
-            console.log(`✅ Transaction sent: ${signature}`);
-        
-            // 7. Confirm Transaction
-            const confirmation = await connection.confirmTransaction(signature, "finalized");
-        
-            if (confirmation.value && confirmation.value.err) {
-                return bot.sendMessage(chatId, `❌ Transaction failed: ${JSON.stringify(confirmation.value.err)}\n🔗 [View on Solscan](https://solscan.io/tx/${signature}/)`, {
-                    parse_mode: "Markdown",
-                });
-            } else {
-                bot.sendMessage(chatId, `✅ Transaction successful!\n🔗 [View on Solscan](https://solscan.io/tx/${signature}/)`, {
-                    parse_mode: "Markdown",
-                });
+
+            // 7. Create and send Jito bundle
+            console.log("\n📦 Creating Jito bundle...");
+            const jitoBundle = await createJitoBundle(transaction, keypair, connection);
+            console.log("✅ Jito bundle created successfully");
+
+            // Answer callback query immediately
+            bot.answerCallbackQuery(query.id, { text: "⏳ Processing swap...", show_alert: false });
+
+            // Send an immediate response to inform the user
+            bot.sendMessage(chatId, "🔄 Your transaction is being processed. This may take a few seconds...");
+
+
+            // console.log("\n📤 Sending Jito bundle...");
+            let bundleId = await sendJitoBundle(jitoBundle);
+            console.log(`✅ Jito bundle sent. Bundle ID: ${bundleId}`);
+
+            console.log("\n🔍 Checking Bundle status...");
+            let bundleStatus = null;
+            let bundleRetries = 10;
+            const delay = 1000; // Wait 1 second per retry
+            
+            if (!bundleId || typeof bundleId !== "string" || bundleId.trim() === "") {
+                console.error("❌ Swap Error: Invalid bundle ID. Cannot check status.");
+                return bot.sendMessage(chatId, "❌ Transaction failed. Invalid bundle ID received.");
+            }
+            
+            // Proceed only if bundleId is valid
+            while (bundleRetries > 0) {
+                console.log(`⏳ Waiting for 1 second before checking bundle status...`);
+                await new Promise((resolve) => setTimeout(resolve, delay));
+
+                try {
+                    bundleStatus = await checkBundleStatus(bundleId);
+
+                    if (bundleStatus) {
+                        console.log(`📦 Bundle Status: ${bundleStatus.status}`);
+
+                        if (bundleStatus.status === "finalized") {
+                            console.log(`✅ Bundle ${bundleId} landed in slot ${bundleStatus.landedSlot}`);
+                            bot.sendMessage(chatId, `✅ Swap Successful!\n🔗 [View on Solscan](https://solscan.io/tx/${bundleStatus.transactionId}/)`);
+                            break;
+                        } else if (bundleStatus.status === "processed") {
+                            bot.sendMessage(chatId, "⌛ Your swap is processed...");
+                        } else if (bundleStatus.status === "confirmed") {
+                            bot.sendMessage(chatId, `✅ Swap Successful!\n🔗 [View on Solscan](https://solscan.io/tx/${bundleStatus.transactionId}/)`);
+                            break;
+                        }else if (!bundleStatus.status) {
+                            return bot.sendMessage(chatId, "❌ Swap failed. Please try again.");                        }
+                    } else {
+                        console.log("⚠️ No valid response for bundle status. Retrying...");
+                    }
+
+                    bundleRetries--;
+                } catch (statusError) {
+                    console.error("❌ Error fetching bundle status:", statusError.message);
+                }
             }
         
         } catch (error) {
@@ -624,7 +725,7 @@ bot.on("callback_query", async (query) => {
         if (!userSellData[chatId]) userSellData[chatId] = {};
 
         // Set default values if they are missing
-        const tokenAmount = userSellData[chatId].sellTokenAmount || 0.001;
+        const tokenAmount = Math.floor(userSellData[chatId].sellTokenAmount || 0.001);
         const slippage = userSellData[chatId].slippage || 50;
         const adjustedSlippage = slippage * 100;
         //adjustedAmount = amount * Math.pow(10, inputTokenInfo.decimals);
@@ -653,69 +754,148 @@ bot.on("callback_query", async (query) => {
                 return bot.sendMessage(chatId, "❌ No trading routes found. Please try again.");
             }
         
-            console.log("🔄 SELL Quote received. Fetching swap instructions...");
+            console.log("🔄 Quote received. Fetching swap instructions...");
         
             // 2. Get swap instructions
-            const swapResponse = await getSwapResponse(
+            const swapInstructions = await getSwapInstructions(
                 quoteResponse,
                 publicKey.toString()
             );
         
-            if (!swapResponse || swapResponse.error) {
+            if (!swapInstructions || swapInstructions.error) {
                 return bot.sendMessage(chatId, "❌ Failed to get swap instructions. Please try again.");
             }
         
-            console.log("📜 SELL Swap instructions received. Preparing transaction...");
+            console.log("📜 Swap instructions received. Preparing transaction...");
         
             // 3. Prepare Transaction
-            const transactionBase64 = swapResponse.swapTransaction;
-            const transaction = VersionedTransaction.deserialize(Buffer.from(transactionBase64, "base64"));
+            const {
+                setupInstructions,
+                swapInstruction: swapInstructionPayload,
+                cleanupInstruction,
+                addressLookupTableAddresses,
+            } = swapInstructions;
         
-            // 4. SIMULATE TRANSACTION BEFORE EXECUTION
-            console.log("🔍 SELL Simulating transaction...");
-            const simulationResult = await connection.simulateTransaction(transaction);
+            const swapInstruction = deserializeInstruction(swapInstructionPayload);
+            
+            const addressLookupTableAccounts = await getAddressLookupTableAccounts(
+                addressLookupTableAddresses,
+                connection
+            );
+
+            const latestBlockhash = await connection.getLatestBlockhash("finalized");
+
+            // 4. Simulate transaction to get compute units
+            const instructions = [
+                ...setupInstructions.map(deserializeInstruction),
+                swapInstruction,
+            ];
         
-            if (simulationResult.value.err) {
-                return bot.sendMessage(chatId, `⚠️ SELL Simulation Failed: ${JSON.stringify(simulationResult.value.err)}\n❌ Swap will not proceed.`, {
+            if (cleanupInstruction) {
+                instructions.push(deserializeInstruction(cleanupInstruction));
+            }
+        
+            const computeUnits = await simulateTransaction(
+                instructions,
+                keypair.publicKey,
+                addressLookupTableAccounts,
+                2,
+                connection
+              );
+
+            if (computeUnits === undefined) {
+                return bot.sendMessage(chatId, `⚠️ Simulation Failed \n❌ Swap will not proceed.`, {
+                    parse_mode: "Markdown",
+                });
+            } else if(computeUnits && computeUnits.error === "InsufficientFundsForRent") {
+                console.log("❌ Insufficient funds for rent. Skipping this swap.");
+                return bot.sendMessage(chatId, `❌ Insufficient funds for rent. Skipping this swap."`, {
                     parse_mode: "Markdown",
                 });
             } else {
-                bot.sendMessage(chatId, `✅ *SELL Simulation Successful!*\n\n🔹 Estimated Fees: ${simulationResult.value.fee || "N/A"} lamports\n🔹 Will proceed with swap execution.`, {
+                bot.sendMessage(chatId, `✅ *Simulation Successful!*\n\n🔹Will proceed with swap execution.`, {
                     parse_mode: "Markdown",
                 });
             }
         
-            // 5. Sign Transaction
+            const priorityFee = await getAveragePriorityFee(connection);
+
+            // 5. Create versioned transaction
+            const transaction = createVersionedTransaction(
+                instructions,
+                keypair.publicKey,
+                addressLookupTableAccounts,
+                latestBlockhash.blockhash,
+                computeUnits,
+                priorityFee
+            );
+        
             console.log("✍️ Signing transaction...");
+            // 6. Sign the transaction
             transaction.sign([keypair]);
         
-            // 6. Send Transaction
-            console.log("🚀 Sending transaction...");
-            const transactionBinary = transaction.serialize();
-            const signature = await connection.sendRawTransaction(transactionBinary, {
-                maxRetries: 2,
-                skipPreflight: true,
-            });
-        
-            console.log(`✅ Transaction sent: ${signature}`);
-        
-            // 7. Confirm Transaction
-            const confirmation = await connection.confirmTransaction(signature, "finalized");
-        
-            if (confirmation.value && confirmation.value.err) {
-                return bot.sendMessage(chatId, `❌ SELL Transaction failed: ${JSON.stringify(confirmation.value.err)}\n🔗 [View on Solscan](https://solscan.io/tx/${signature}/)`, {
-                    parse_mode: "Markdown",
-                });
-            } else {
-                bot.sendMessage(chatId, `✅ SELL Transaction successful!\n🔗 [View on Solscan](https://solscan.io/tx/${signature}/)`, {
-                    parse_mode: "Markdown",
-                });
+
+            // 7. Create and send Jito bundle
+            console.log("\n📦 Creating Jito bundle...");
+            const jitoBundle = await createJitoBundle(transaction, keypair, connection);
+            console.log("✅ Jito bundle created successfully");
+
+            // Send an immediate response to inform the user
+            bot.sendMessage(chatId, "🔄 Your transaction is being processed. This may take a few seconds...");
+
+
+            // console.log("\n📤 Sending Jito bundle...");
+            let bundleId = await sendJitoBundle(jitoBundle);
+            console.log(`✅ Jito bundle sent. Bundle ID: ${bundleId}`);
+
+            console.log("\n🔍 Checking Bundle status...");
+            let bundleStatus = null;
+            let bundleRetries = 10;
+            const delay = 1000; // Wait 1 second per retry
+            
+            if (!bundleId || typeof bundleId !== "string" || bundleId.trim() === "") {
+                console.error("❌ Swap Error: Invalid bundle ID. Cannot check status.");
+                return bot.sendMessage(chatId, "❌ Transaction failed. Invalid bundle ID received.");
             }
-        
+            
+            // Proceed only if bundleId is valid
+            while (bundleRetries > 0) {
+                console.log(`⏳ Waiting for 1 second before checking bundle status...`);
+                await new Promise((resolve) => setTimeout(resolve, delay));
+
+                try {
+                    bundleStatus = await checkBundleStatus(bundleId);
+
+                    if (bundleStatus) {
+                        console.log(`📦 Bundle Status: ${bundleStatus.status}`);
+
+                        if (bundleStatus.status === "finalized") {
+                            console.log(`✅ Bundle ${bundleId} landed in slot ${bundleStatus.landedSlot}`);
+                            bot.sendMessage(chatId, `✅ Swap Successful!\n🔗 [View on Solscan](https://solscan.io/tx/${bundleStatus.transactionId}/)`);
+                            break;
+                        } else if (bundleStatus.status === "processed") {
+                            bot.sendMessage(chatId, "⌛ Your swap is processed...");
+                        } else if (bundleStatus.status === "confirmed") {
+                            bot.sendMessage(chatId, `✅ Swap Successful!\n🔗 [View on Solscan](https://solscan.io/tx/${bundleStatus.transactionId}/)`);
+                            break;                        
+                        }else if (!bundleStatus.status) {
+                            return bot.sendMessage(chatId, "❌ Swap failed. Please try again.");                        }
+                    } else {
+                        console.log("⚠️ No valid response for bundle status. Retrying...");
+                    }
+
+
+                    bundleRetries--;
+                } catch (statusError) {
+                    console.error("❌ Error fetching bundle status:", statusError.message);
+                }
+            }
+                    
         } catch (error) {
-            console.error("❌ SELL Swap Error:", error);
-            bot.sendMessage(chatId, "❌ SELL Swap failed. Please try again.");
+            console.error("❌ Swap Error:", error);
+            bot.sendMessage(chatId, "❌ Swap failed. Please try again.");
         }
+        
         
         
         delete userBuyData[chatId];
@@ -803,7 +983,7 @@ bot.on("callback_query", async (query) => {
                     const balance = await checkWallet(publicKey, connection);
 
                     const checkmark = (i === activeIndex) ? "✅" : "";  // Show ✅ for active wallet
-                    solanaText += `\`${publicKey}\`\n*Label:* W${i + 1} ${checkmark}\n*Balance:* ${balance.toFixed(2)} SOL\n\n`;
+                    solanaText += `\`${publicKey}\`\n*Label:* W${i + 1} ${checkmark}\n*Balance:* ${balance.toFixed(4)} SOL\n\n`;
 
                     solanaWalletButtons.push([{ text: `W${i + 1}`, callback_data: `set_active_wallet_${i}` }]);
                 }
