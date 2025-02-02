@@ -1086,8 +1086,9 @@ bot.on("callback_query", async (query) => {
                         //[{ text: "📊 Positions", callback_data: "positions" }, { text: "📈 Limit Orders", callback_data: "limit_orders" }, { text: "📉 DCA Orders", callback_data: "dca_orders" }],
                         //[{ text: "📎 Copy Trade", callback_data: "copy_trade" }, { text: "🎯 Sniper", callback_data: "sniper" }],
                         //[{ text: "⚔️ Trenches", callback_data: "trenches" }, { text: "👥 Referrals", callback_data: "referrals" }, { text: "⭐ Watchlist", callback_data: "watchlist" }],
-                        [{ text: "💸 Withdraw", callback_data: "withdraw" }, { text: "👛 Wallets", callback_data: "wallets" }],
-                        [{ text: "❓ Help", callback_data: "help" }, { text: "🔄 Refresh", callback_data: "refresh" }]
+                        [{ text: "👛 Wallets", callback_data: "wallets" }]
+                        //[{ text: "💸 Withdraw", callback_data: "withdraw" }, { text: "👛 Wallets", callback_data: "wallets" }],
+                        //[{ text: "❓ Help", callback_data: "help" }, { text: "🔄 Refresh", callback_data: "refresh" }]
                     ]
                 }
             };
@@ -1152,8 +1153,9 @@ bot.onText(/\/start/, async (msg) => {
                     //[{ text: "📊 Positions", callback_data: "positions" }, { text: "📈 Limit Orders", callback_data: "limit_orders" }, { text: "📉 DCA Orders", callback_data: "dca_orders" }],
                     //[{ text: "📎 Copy Trade", callback_data: "copy_trade" }, { text: "🎯 Sniper", callback_data: "sniper" }],
                     //[{ text: "⚔️ Trenches", callback_data: "trenches" }, { text: "👥 Referrals", callback_data: "referrals" }, { text: "⭐ Watchlist", callback_data: "watchlist" }],
-                    [{ text: "💸 Withdraw", callback_data: "withdraw" }, { text: "👛 Wallets", callback_data: "wallets" }],
-                    [{ text: "❓ Help", callback_data: "help" }, { text: "🔄 Refresh", callback_data: "refresh" }]
+                    //[{ text: "💸 Withdraw", callback_data: "withdraw" }, { text: "👛 Wallets", callback_data: "wallets" }],
+                    [{ text: "👛 Wallets", callback_data: "wallets" }]
+                    //[{ text: "❓ Help", callback_data: "help" }, { text: "🔄 Refresh", callback_data: "refresh" }]
                 ]
             }
         };
