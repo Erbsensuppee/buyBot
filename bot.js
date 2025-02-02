@@ -98,8 +98,14 @@ async function fetchTokenPrice(chatId, tokenMint) {
         const activeIndex = wallets[chatId].activeWallet || 0;
         const userWallet = wallets[chatId].wallets[activeIndex];
         const publicKey = userWallet.publicKey;
-        let solAmount = 0.001;
-        let slippage = 0.5;
+
+        // Ensure userBuyData[chatId] exists before accessing solAmount
+        if (!userBuyData[chatId]) {
+            userBuyData[chatId] = {};  // Initialize it to an empty object if undefined
+        }
+
+        let solAmount = userBuyData[chatId].solAmount || 0.001;
+        let slippage = userBuyData[chatId].slippage || 0.5;
         const balance = await checkWallet(publicKey, connection);
 
         // Show swap details
@@ -657,9 +663,11 @@ bot.on("callback_query", async (query) => {
             bot.sendMessage(chatId, "❌ Swap failed. Please try again.");
         }
         
-        
+        let tmpBuySolAmount = userBuyData[chatId]?.solAmount; // Default solAmount
+        let tmpBuySlippage = userBuyData[chatId]?.slippage; // Default slippage (use ?? to allow 0 as valid)        
         delete userBuyData[chatId];
-
+        userBuyData[chatId] = { solAmount: tmpBuySolAmount, slippage : tmpBuySlippage }; // Recreate chatId object with only solAmount
+        
 
     } else if (data === "sell") {
         if (!wallets[chatId] || !wallets[chatId].wallets || wallets[chatId].wallets.length === 0) {
@@ -736,7 +744,7 @@ bot.on("callback_query", async (query) => {
         const publicKey = new PublicKey(userWallet.publicKey);
         const keypair = Keypair.fromSecretKey(bs58.decode(userWallet.privateKeyBase58));
 
-        bot.sendMessage(chatId, `🔄 *Processing SELL Order*\n\n💰 Token Amount: *${tokenAmount}*\n🔄 Slippage: *${slippage}%*\n\nFetching the best swap route and process the swap...`, {
+        bot.sendMessage(chatId, `🔄 *Processing SELL Order*\n\n💰 Token Amount: *${userSellData[chatId].tokenBalance}*\n🔄 Slippage: *${slippage}%*\n\nFetching the best swap route and process the swap...`, {
             parse_mode: "Markdown"
         });
 
@@ -898,7 +906,7 @@ bot.on("callback_query", async (query) => {
         
         
         
-        delete userBuyData[chatId];
+        delete userSellData[chatId];
 
 
     } else if (data === "positions") {
