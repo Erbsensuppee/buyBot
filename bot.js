@@ -957,16 +957,15 @@ bot.on("callback_query", async (query) => {
             parse_mode: "Markdown",
             ...settingsMenu
         });
-    } else if (data === "wallets"){
+    } else if (data === "wallets") {
         try {
             let solanaText = "*Solana Wallets*\n";
             let walletsMenu;
             let solanaWalletButtons = [];
-
+    
             const activeIndex = wallets[chatId].activeWallet || 0;  // Default to first wallet
-
-
-            if ( wallets[chatId].length === 0) {
+    
+            if (!wallets[chatId] || wallets[chatId].wallets.length === 0) {
                 solanaText += "🚨 *No wallet found.*\nCreate one using the button below.\n\n";
                 walletsMenu = {
                     reply_markup: {
@@ -981,37 +980,46 @@ bot.on("callback_query", async (query) => {
                     const userWallet = wallets[chatId].wallets[i];
                     const publicKey = userWallet.publicKey;
                     const balance = await checkWallet(publicKey, connection);
-
+    
                     const checkmark = (i === activeIndex) ? "✅" : "";  // Show ✅ for active wallet
                     solanaText += `\`${publicKey}\`\n*Label:* W${i + 1} ${checkmark}\n*Balance:* ${balance.toFixed(4)} SOL\n\n`;
-
-                    solanaWalletButtons.push([{ text: `W${i + 1}`, callback_data: `set_active_wallet_${i}` }]);
+    
+                    // Add each wallet button to the array
+                    solanaWalletButtons.push({ text: `W${i + 1} ${checkmark}`, callback_data: `set_active_wallet_${i}` });
                 }
+    
+                // Group buttons into rows of 3
+                let formattedButtons = [];
+                for (let i = 0; i < solanaWalletButtons.length; i += 3) {
+                    formattedButtons.push(solanaWalletButtons.slice(i, i + 3));
+                }
+    
+                // Add "Create Wallet" and "Back" buttons at the bottom
+                formattedButtons.push([{ text: "➕ Create Solana Wallet", callback_data: "create_wallet" }]);
+                formattedButtons.push([{ text: "⬅️ Back to Main", callback_data: "main_menu" }]);
+    
+                walletsMenu = {
+                    reply_markup: {
+                        inline_keyboard: formattedButtons
+                    }
+                };
             }
-            walletsMenu = {
-                reply_markup: {
-                    inline_keyboard: [
-                        ...solanaWalletButtons, // Inserts only existing wallet buttons
-                        [{ text: "➕ Create Solana Wallet", callback_data: "create_wallet" }],// { text: "📥 Import Solana Wallet", callback_data: "import_wallet" }],
-                        [{ text: "⬅️ Back to Main", callback_data: "main_menu" }]
-                    ]
-                }
-            };
-
+    
             bot.editMessageText(`${solanaText}💡 To rename or export your Solana wallets, click the button with the wallet's name.`, {
                 chat_id: chatId,
                 message_id: messageId,
                 parse_mode: "Markdown",
                 ...walletsMenu
             });
-
+    
         } catch (error) {
             bot.sendMessage(chatId, "❌ Error fetching wallets.");
-            console.log("❌ Error fetching wallets." + error.message);
+            console.log("❌ Error fetching wallets: " + error.message);
         }
     } else if(data === "create_wallet"){
-        if (wallets[chatId].wallets.length >= 5) {
-            return bot.sendMessage(chatId, "🚨 You can only create up to 5 wallets.");
+        let max_Wallets = 10
+        if (wallets[chatId].wallets.length >= max_Wallets) {
+            return bot.sendMessage(chatId, `🚨 You can only create up to ${max_Wallets} wallets.`);
         }
 
         const newWallet = Keypair.generate();
