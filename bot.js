@@ -105,7 +105,7 @@ async function fetchTokenPrice(chatId, tokenMint) {
         }
 
         let solAmount = userBuyData[chatId].solAmount || 0.001;
-        let slippage = userBuyData[chatId].slippage || 0.5;
+        let slippage = userBuyData[chatId].slippage || 5;
         const balance = await checkWallet(publicKey, connection);
 
         // Show swap details
@@ -198,7 +198,7 @@ async function fetchSellPrice(chatId, tokenMint) {
         const tmpSellAmount = Number(accountInfo.amount);
 
         const tokenBalance = tokenAccounts.value[0].account.data.parsed.info.tokenAmount.uiAmount;
-        const slippage = userSellData[chatId]?.slippage || 0.5;
+        const slippage = userSellData[chatId]?.slippage || 5;
         const selectedPercentage = userSellData[chatId]?.selectedPercentage || 0; // Default: No selection
 
         // Calculate estimated SOL received for different percentages
@@ -269,7 +269,7 @@ async function refreshBuyWindow(chatId, messageId) {
 
     const tokenMint = userBuyData[chatId].tokenMint;
     const solAmount = userBuyData[chatId].solAmount || 0.5; // Default to 0.5 SOL
-    const slippage = userBuyData[chatId].slippage || 0.5; // Default to 0.5%
+    const slippage = userBuyData[chatId].slippage || 5; // Default to 0.5%
 
     // Fetch token price again
     const response = await axios.get(`https://api.jup.ag/price/v2?ids=${tokenMint},${process.env.SOLANA_ADDRESS}`);
@@ -494,7 +494,7 @@ bot.on("callback_query", async (query) => {
 
         // Set default values if they are missing
         const solAmount = userBuyData[chatId].solAmount || 0.001;
-        const slippage = userBuyData[chatId].slippage || 50;
+        const slippage = userBuyData[chatId].slippage || 5;
         const adjustedAmount = Math.floor(solAmount * LAMPORTS_PER_SOL); // Convert to lamports
         const adjustedSlippage = slippage * 100;
         //adjustedAmount = amount * Math.pow(10, inputTokenInfo.decimals);
@@ -734,7 +734,7 @@ bot.on("callback_query", async (query) => {
 
         // Set default values if they are missing
         const tokenAmount = Math.floor(userSellData[chatId].sellTokenAmount || 0.001);
-        const slippage = userSellData[chatId].slippage || 50;
+        const slippage = userSellData[chatId].slippage || 5;
         const adjustedSlippage = slippage * 100;
         //adjustedAmount = amount * Math.pow(10, inputTokenInfo.decimals);
 
