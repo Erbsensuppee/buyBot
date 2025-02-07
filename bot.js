@@ -578,7 +578,7 @@ bot.on("callback_query", async (query) => {
                 connection, 
                 transaction, 
                 [senderKeypair],  // The array of signers
-                { commitment: "confirmed" }  // Commitment option in an object
+                { commitment: "finalized" }  // Commitment option in an object
             );
             
     
@@ -1488,7 +1488,8 @@ async function refreshWithdrawMenu(chatId, messageId) {
 
     // ✅ If both SOL amount and withdrawal address are set, send a **new message** with the Withdraw button
     if (solAmount !== "X" && withdrawalAddress !== "Not Set") {
-        const withdrawConfirmationText = `💸 *Confirm Withdrawal*  
+        const withdrawConfirmationText = `💸 *Confirm Withdrawal*
+✅ *Active Wallet:* W${activeIndex + 1}     
 📄 *Balance:* ${balance.toFixed(8)} SOL  
 💰 *Amount:* ${solAmount} SOL  
 🏦 *To:* \`${withdrawalAddress}\``;
