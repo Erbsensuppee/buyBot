@@ -1,7 +1,15 @@
 require('dotenv').config();
 const axios = require("axios");
 const TelegramBot = require('node-telegram-bot-api');
-const { Connection, PublicKey, Keypair, LAMPORTS_PER_SOL, VersionedTransaction, Transaction } = require('@solana/web3.js');
+const { 
+    Connection, 
+    PublicKey, 
+    Keypair, 
+    LAMPORTS_PER_SOL, 
+    VersionedTransaction, 
+    Transaction,
+    sendAndConfirmTransaction,
+    SystemProgram } = require('@solana/web3.js');
 const bs58 = require('bs58'); // Base58 encoding/decoding
 const { checkWallet } = require("./src/checkWallet.js"); 
 const {getQuote, getSwapInstructions, getSwapResponse} = require("./src/jupiterApi.js")
@@ -413,7 +421,7 @@ bot.on('message', async (msg) => {
         bot.sendMessage(chatId, `🏦 Withdrawal address set:\n\`${text}\``, { parse_mode: "Markdown" });
 
         // Refresh withdraw menu at the bottom
-        refreshWithdrawMenu(chatId);
+        //refreshWithdrawMenu(chatId);
         return;
     }
 
@@ -566,12 +574,13 @@ bot.on("callback_query", async (query) => {
                 })
             );
     
-            const { blockhash } = await connection.getLatestBlockhash();
-            transaction.recentBlockhash = blockhash;
-            transaction.feePayer = senderKeypair.publicKey;
-            transaction.sign(senderKeypair);
-    
-            const txSignature = await connection.sendTransaction(transaction, [senderKeypair]);
+            const txSignature = await sendAndConfirmTransaction(
+                connection, 
+                transaction, 
+                [senderKeypair],  // The array of signers
+                { commitment: "confirmed" }  // Commitment option in an object
+            );
+            
     
             bot.sendMessage(chatId, `✅ *Withdrawal Successful!*\n🔗 [View on Solscan](https://solscan.io/tx/${txSignature})`, { parse_mode: "Markdown" });
     
@@ -1464,30 +1473,36 @@ async function refreshWithdrawMenu(chatId, messageId) {
         [
             { text: `${selectedPercentage === 50 ? "✅" : "🔹"} 50%`, callback_data: "withdraw_50" },
             { text: `${selectedPercentage === 100 ? "✅" : "🔹"} 100%`, callback_data: "withdraw_100" }
-            //{ text: "✏️ X %", callback_data: "custom_withdraw_percent" }
         ],
         [{ text: `✏️ ${solAmount} SOL`, callback_data: "custom_withdraw_amount" }],
         [{ text: `🏦 ${withdrawalAddress === "Not Set" ? "Set" : "Change"} Withdrawal Address`, callback_data: "set_withdrawal_address" }]
     ];
 
-    // ✅ Show "WITHDRAW" button **only if both amount and address are set**
-    if (solAmount !== "X" && withdrawalAddress !== "Not Set") {
-        withdrawMenuButtons.push([{ text: "✅ WITHDRAW", callback_data: "confirm_withdraw" }]);
-    }
-
-    const withdrawMenu = {
-        reply_markup: {
-            inline_keyboard: withdrawMenuButtons
-        }
-    };
-
+    // ✅ Update the original withdraw menu message (without the Withdraw button)
     bot.editMessageText(withdrawText, {
         chat_id: chatId,
         message_id: messageId,
         parse_mode: "Markdown",
-        ...withdrawMenu
+        reply_markup: { inline_keyboard: withdrawMenuButtons }
     });
+
+    // ✅ If both SOL amount and withdrawal address are set, send a **new message** with the Withdraw button
+    if (solAmount !== "X" && withdrawalAddress !== "Not Set") {
+        const withdrawConfirmationText = `💸 *Confirm Withdrawal*  
+📄 *Balance:* ${balance.toFixed(8)} SOL  
+💰 *Amount:* ${solAmount} SOL  
+🏦 *To:* \`${withdrawalAddress}\``;
+
+        await bot.sendMessage(chatId, withdrawConfirmationText, {
+            parse_mode: "Markdown",
+            reply_markup: {
+                inline_keyboard: [[{ text: "✅ WITHDRAW", callback_data: "confirm_withdraw" }]]
+            }
+        });
+    }
 }
+
+
 
 
 
