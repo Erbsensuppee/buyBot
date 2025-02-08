@@ -17,7 +17,11 @@ const fs = require('fs');
 const { getAccount } = require("@solana/spl-token");
 const { getAddressLookupTableAccounts, simulateTransaction, getAveragePriorityFee, createVersionedTransaction, deserializeInstruction } = require("./src/utils.js")
 const { createJitoBundle, sendJitoBundle, bundleSignature, checkBundleStatus } = require("./src/jitoService.js")
-
+const { 
+    formatNumber, 
+    calculateMarketCap,
+    calculateTokens
+ } = require("./src/helperFunctions.js")
 
 const allowedUsers = process.env.ALLOWED_USERS ? process.env.ALLOWED_USERS.split(',').map(Number) : [];
 const bot = new TelegramBot(process.env.TELEGRAM_BOT_TOKEN, { polling: true });
@@ -82,6 +86,10 @@ async function fetchTokenPrice(chatId, tokenMint) {
         if (!isValidSolanaAddress(tokenMint)) {
             return bot.sendMessage(chatId, "❌ Invalid token mint address. Please enter a correct Solana token address.");
         }
+        // Ensure userBuyData[chatId] exists before accessing solAmount
+        if (!userBuyData[chatId]) {
+            userBuyData[chatId] = {};  // Initialize it to an empty object if undefined
+        }
 
         // Fetch token price from Jupiter API
         const response = await axios.get(`https://api.jup.ag/price/v2?ids=${tokenMint},${process.env.SOLANA_ADDRESS}`);
@@ -99,37 +107,35 @@ async function fetchTokenPrice(chatId, tokenMint) {
 
         // Extract token details
         const tokenData = response.data.data[tokenMint];
+        userBuyData[chatId].tokenData = tokenData
+        const solanaData = response.data.data[process.env.SOLANA_ADDRESS];
+        userBuyData[chatId].solanaData = solanaData
         const tokenInformations = response2.data;
+        userBuyData[chatId].tokenInformations = tokenInformations
         const price = tokenData.price || 0;
-        const liquidity = tokenData.liquidity || "N/A";
-        const marketCap = tokenData.marketCap || "N/A";
 
         // Fetch the user's active wallet balance
         const activeIndex = wallets[chatId].activeWallet || 0;
         const userWallet = wallets[chatId].wallets[activeIndex];
         const publicKey = userWallet.publicKey;
 
-        // Ensure userBuyData[chatId] exists before accessing solAmount
-        if (!userBuyData[chatId]) {
-            userBuyData[chatId] = {};  // Initialize it to an empty object if undefined
-        }
-
         let solAmount = userBuyData[chatId].solAmount || 0.001;
         let slippage = userBuyData[chatId].slippage || 5;
         const balance = await checkWallet(publicKey, connection);
+        userBuyData[chatId].userBalance = balance;
 
         // Show swap details
-        const priceImpact = (tokenData.priceImpact || 0) * 100;
-        const solToTokenRate = 1 / price;
+        let tokenSymbol = tokenInformations.symbol;
+        let tokenMarcetCap = calculateMarketCap(tokenInformations.decimals, tokenData.price);
+        let tokenValue = solAmount * solanaData.price;
+        let calculatedTokenAmount = calculateTokens(solanaData.price, tokenData.price, solAmount);
+        let message = "";
+        message += `*Buy $${tokenSymbol.toUpperCase()}* — (${tokenSymbol})\n\`${tokenMint}\`\n\n`;
 
-        let message = `🪙 *Token Found!*\n\n`;
-        message += `Buy *$${tokenInformations.symbol}*\n\`${tokenMint}\`\n`;
-        message += `💰 *SOL Amount:* ${solAmount} SOL\n`;
-        message += `🔄 *Slippage:* ${slippage}%\n`;
-        message += `📊 *Price:* $${price}\n`;
-        //message += `📊 *Price:* $${price} — LIQ: *$${liquidity}* — MC: *$${marketCap}\n`;
-        message += `⚖️ *${solAmount} SOL → ${solToTokenRate.toFixed(2)} ${tokenData.mint}*\n`;
-        //message += `📉 *Price Impact:* ${priceImpact.toFixed(2)}%\n`;
+        message += `Balance: *${balance.toFixed(3)} SOL — W${activeIndex + 1}*\n`
+        message += `Price: *$${formatNumber(price)}* — MC: *$${tokenMarcetCap.toFixed(2)}K*\n\n`;
+
+        message += `*${solAmount} SOL* ⇄ *${calculatedTokenAmount.toFixed(0)} ${tokenSymbol.toUpperCase()} ($${tokenValue.toFixed(2)})*\n`;
 
         // Store the custom amount for this user
         if (!userBuyData[chatId]) userBuyData[chatId] = {};
@@ -269,37 +275,40 @@ async function fetchSellPrice(chatId, tokenMint) {
     }
 }
 
-
-
-
 async function refreshBuyWindow(chatId, messageId) {
     if (!userBuyData[chatId] || !userBuyData[chatId].tokenMint) {
         return bot.sendMessage(chatId, "❌ No token selected. Please enter a token mint first.");
+    }
+
+    // Ensure userBuyData[chatId] exists before accessing solAmount
+    if (!userBuyData[chatId]) {
+        userBuyData[chatId] = {};  // Initialize it to an empty object if undefined
     }
 
     const tokenMint = userBuyData[chatId].tokenMint;
     const solAmount = userBuyData[chatId].solAmount || 0.5; // Default to 0.5 SOL
     const slippage = userBuyData[chatId].slippage || 5; // Default to 0.5%
 
-    // Fetch token price again
-    const response = await axios.get(`https://api.jup.ag/price/v2?ids=${tokenMint},${process.env.SOLANA_ADDRESS}`);
-    if (!response.data || !response.data.data[tokenMint]) {
-        return bot.sendMessage(chatId, "❌ Token not found on Jupiter. Please try again.");
-    }
-
+    const tokenInformations = userBuyData[chatId].tokenInformations;
     const activeIndex = wallets[chatId].activeWallet || 0;
-    const tokenData = response.data.data[tokenMint];
+    const tokenData = userBuyData[chatId].tokenData;
+    const solanaData = userBuyData[chatId].solanaData;
     const price = tokenData.price || 0;
-    const solToTokenRate = solAmount / price;
-    const priceImpact = (tokenData.priceImpact || 0) * 100;
+    const balance = userBuyData[chatId].userBalance;
 
-    let message = `🪙 *Token Found!*\n\n`;
-    message += `Buy *$${tokenData.symbol}*\n\`${tokenMint}\`\n`;
-    message += `💰 *SOL Amount:* ${solAmount} SOL\n`;
-    message += `🔄 *Slippage:* ${slippage}%\n`;
-    message += `📊 *Price:* $${price}\n`;
-    message += `⚖️ *${solAmount} SOL → ${solToTokenRate.toFixed(2)} ${tokenData.mint}*\n`;
-    message += `📉 *Price Impact:* ${priceImpact.toFixed(2)}%\n`;
+    let tokenSymbol = tokenInformations.symbol;
+    let tokenMarcetCap = calculateMarketCap(tokenInformations.decimals, tokenData.price);
+    let tokenValue = solAmount * solanaData.price;
+    let calculatedTokenAmount = calculateTokens(solanaData.price, tokenData.price, solAmount);
+    let message = "";
+    // Show swap details
+    message += `*Buy $${tokenSymbol.toUpperCase()}* — (${tokenSymbol})\n\`${tokenMint}\`\n\n`;
+
+    message += `Balance: *${balance.toFixed(3)} SOL — W${activeIndex + 1}*\n`
+    message += `Price: *$${formatNumber(price)}* — MC: *$${tokenMarcetCap.toFixed(2)}K*\n\n`;
+
+    message += `*${solAmount} SOL* ⇄ *${calculatedTokenAmount.toFixed(0)} ${tokenSymbol.toUpperCase()} ($${tokenValue.toFixed(2)})*\n`;
+
 
     // Rebuild the buy menu with updated values
     const buyMenu = {
@@ -714,7 +723,7 @@ bot.on("callback_query", async (query) => {
                     parse_mode: "Markdown",
                 });
             } else {
-                bot.sendMessage(chatId, `✅ *Simulation Successful!*\n\n🔹}🔹 Will proceed with swap execution.`, {
+                bot.sendMessage(chatId, `✅ *Simulation Successful!*\n\n🔹 Will proceed with swap execution.`, {
                     parse_mode: "Markdown",
                 });
             }
