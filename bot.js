@@ -20,7 +20,8 @@ const { createJitoBundle, sendJitoBundle, bundleSignature, checkBundleStatus } =
 const { 
     formatNumber, 
     calculateMarketCap,
-    calculateTokens
+    calculateTokens,
+    calculateSolana
  } = require("./src/helperFunctions.js")
 
 const allowedUsers = process.env.ALLOWED_USERS ? process.env.ALLOWED_USERS.split(',').map(Number) : [];
@@ -175,6 +176,8 @@ async function fetchSellPrice(chatId, tokenMint) {
         if (!isValidSolanaAddress(tokenMint)) {
             return bot.sendMessage(chatId, "❌ Invalid token mint address. Please enter a correct Solana token address.");
         }
+        // Store the token info for this user
+        if (!userSellData[chatId]) userSellData[chatId] = {};
 
         // Fetch token price from Jupiter API (Reverse: token → SOL)
         const response = await axios.get(`https://api.jup.ag/price/v2?ids=${tokenMint},${process.env.SOLANA_ADDRESS}`);
@@ -192,7 +195,11 @@ async function fetchSellPrice(chatId, tokenMint) {
 
         // Extract token details
         const tokenData = response.data.data[tokenMint];
+        userSellData[chatId].tokenData = tokenData;
+        const solanaData = response.data.data[process.env.SOLANA_ADDRESS];
+        userSellData[chatId].solanaData = solanaData;
         const tokenInformations = response2.data;
+        userSellData[chatId].tokenInformations = tokenInformations
         const price = tokenData.price || 0;
 
         // Fetch the user's active wallet balance
@@ -211,11 +218,12 @@ async function fetchSellPrice(chatId, tokenMint) {
         }
         const tokenAccount = tokenAccounts.value[0].pubkey;
         const accountInfo = await getAccount(connection, tokenAccount);
+        userSellData[chatId].accountInfo = accountInfo;
         const tmpSellAmount = Number(accountInfo.amount);
 
         const tokenBalance = tokenAccounts.value[0].account.data.parsed.info.tokenAmount.uiAmount;
         const slippage = userSellData[chatId]?.slippage || 5;
-        const selectedPercentage = userSellData[chatId]?.selectedPercentage || 0; // Default: No selection
+        const selectedPercentage = userSellData[chatId]?.selectedPercentage || 100; // Default: No selection
 
         // Calculate estimated SOL received for different percentages
         const percentages = [0, 25, 50, 75, 100];
@@ -231,21 +239,26 @@ async function fetchSellPrice(chatId, tokenMint) {
         const selectedAmount = estimatedAmounts.find(item => item.pct === selectedPercentage)?.amount || 0;
         const selectedHumanAmount = estimatedAmounts.find(item => item.pct === selectedPercentage)?.humanAmount || 0;
 
-        // Store the token info for this user
-        if (!userSellData[chatId]) userSellData[chatId] = {};
+
         userSellData[chatId].tokenMint = tokenMint;
         userSellData[chatId].tokenSymbol = tokenInformations.symbol;
         userSellData[chatId].tokenBalance = tokenBalance;
         userSellData[chatId].slippage = slippage;
         userSellData[chatId].sellTokenAmount = selectedAmount;
+        let tokenSymbol = tokenInformations.symbol;
+        let tokenValue = tokenData.price * tokenBalance;
+        let selectedValue = tokenData.price * selectedHumanAmount;
+        let tokenMarcetCap = calculateMarketCap(tokenInformations.decimals, tokenData.price, tokenBalance);
+        let solanaAmount = calculateSolana(solanaData.price, tokenData.price, selectedHumanAmount)
+        let solanaSellValue = solanaAmount * solanaData.price;
+        let message = ``;
+        message += `*Sell $${tokenSymbol.toUpperCase()}* — (${tokenSymbol})\n\`${tokenMint}\`\n\n`;
 
-        let message = `🪙 *Token Found!*\n\n`;
-        message += `Sell *$${tokenInformations.symbol}*\n\`${tokenMint}\`\n`;
-        message += `💰 *Balance:* ${tokenBalance.toFixed(4)} ${tokenInformations.symbol}\n`;
-        message += `🔄 *Slippage:* ${slippage}%\n`;
-        message += `📊 *Price:* $${price}\n`;
-        message += `*Sell Token Amount:* ${selectedHumanAmount}`;
+        message += `Balance: *${tokenBalance.toFixed(4)} ${tokenSymbol.toUpperCase()} ($${tokenValue.toFixed(2)}) — W${activeIndex + 1}\n`;
+        message += `Price: *$${formatNumber(price)}* — MC: *$${tokenMarcetCap.toFixed(2)}K*\n\n`;
 
+        message += `__You Sell__:\n`
+        message += `*${selectedHumanAmount.toFixed(0)} ($${selectedValue.toFixed(2)}) ⇄ *${solanaAmount.toFixed(3)} SOL ($${solanaSellValue.toFixed(2)})*`
 
         // Build sell menu with percentage options
         const sellMenu = {
@@ -477,19 +490,19 @@ bot.on("callback_query", async (query) => {
 
         bot.sendMessage(chatId, "💰 Enter a token symbol or address to buy:");
 
-        // Step 2: Capture user's response (next message)
-        bot.once("message", async (msg) => {
-            const tokenInput = msg.text.trim();
+        // // Step 2: Capture user's response (next message)
+        // bot.once("message", async (msg) => {
+        //     const tokenInput = msg.text.trim();
 
-            // Validate input
-            if (!isValidSolanaAddress(tokenInput) && tokenInput.length > 10) {
-                return bot.sendMessage(chatId, "❌ Invalid token address. Please enter a correct Solana token address or symbol.");
-            }
+        //     // Validate input
+        //     if (!isValidSolanaAddress(tokenInput) && tokenInput.length > 10) {
+        //         return bot.sendMessage(chatId, "❌ Invalid token address. Please enter a correct Solana token address or symbol.");
+        //     }
 
-            // Proceed to fetch price
-            const tokenSymbol = tokenInput;
-            await fetchTokenPrice(chatId, tokenSymbol);
-        });
+        //     // Proceed to fetch price
+        //     const tokenSymbol = tokenInput;
+        //     await fetchTokenPrice(chatId, tokenSymbol);
+        // });
     } else if (data === "custom_withdraw_amount") {
         bot.sendMessage(chatId, "💰 Enter the amount of SOL you want to withdraw:");
 
@@ -633,6 +646,9 @@ bot.on("callback_query", async (query) => {
         });
     } else if (data.startsWith("confirm_buy_")){
         const outputMint = data.split("_")[2]; // Extract token mint
+        bot.sendMessage(chatId, `🔄 Your buy is being processed. This may take a few seconds...`, {
+            parse_mode: "Markdown",
+        });
         const inputMint = process.env.SOLANA_ADDRESS;
         // Ensure userBuyData[chatId] exists
         if (!userBuyData[chatId]) userBuyData[chatId] = {};
@@ -876,6 +892,9 @@ bot.on("callback_query", async (query) => {
         const outputMint = process.env.SOLANA_ADDRESS;
         // Ensure userBuyData[chatId] exists
         if (!userSellData[chatId]) userSellData[chatId] = {};
+        bot.sendMessage(chatId, `🔄 Your Sell is being processed. This may take a few seconds...`, {
+            parse_mode: "Markdown",
+        });
 
         // Set default values if they are missing
         const tokenAmount = Math.floor(userSellData[chatId].sellTokenAmount || 0.001);
