@@ -531,15 +531,21 @@ bot.on("callback_query", async (query) => {
         // Fetch the user's active wallet balance
         const activeIndex = wallets[chatId].activeWallet || 0;
         const userWallet = wallets[chatId].wallets[activeIndex];
-        const publicKey = userWallet.publicKey;
-        const balance = await checkWallet(publicKey, connection);
+        const publicKey = new PublicKey(userWallet.publicKey);
+
+        const balance = await connection.getBalance(publicKey);
+
     
         // Calculate amount based on percentage
         const solAmount = (balance * percentage) / 100;
     
+        // Calculate the max transferable SOL (leave a small amount for transaction fees)
+        const rentExemptionBuffer = 5000; // Small buffer for transaction fees
+        const lamportsToSend = solAmount - rentExemptionBuffer > 0 ? solAmount - rentExemptionBuffer : 0;
+
         // Store the selected percentage and amount
         userWithdrawData[chatId].selectedPercentage = percentage;
-        userWithdrawData[chatId].solAmount = solAmount;
+        userWithdrawData[chatId].solAmount = lamportsToSend;
     
         // Refresh the withdraw menu with updated values
         refreshWithdrawMenu(chatId, messageId);
@@ -581,7 +587,7 @@ bot.on("callback_query", async (query) => {
             return bot.sendMessage(chatId, "❌ Invalid withdrawal address.");
         }
     
-        bot.sendMessage(chatId, `🔄 Processing withdrawal of *${solAmount} SOL* to:\n\`${withdrawalAddress}\``, { parse_mode: "Markdown" });
+        bot.sendMessage(chatId, `🔄 Processing withdrawal of *${solAmount/LAMPORTS_PER_SOL} SOL* to:\n\`${withdrawalAddress}\``, { parse_mode: "Markdown" });
     
         try {
             const activeIndex = wallets[chatId].activeWallet || 0;
@@ -592,7 +598,7 @@ bot.on("callback_query", async (query) => {
                 SystemProgram.transfer({
                     fromPubkey: senderKeypair.publicKey,
                     toPubkey: new PublicKey(withdrawalAddress),
-                    lamports: solAmount * LAMPORTS_PER_SOL
+                    lamports: solAmount
                 })
             );
     
@@ -1493,7 +1499,7 @@ async function refreshWithdrawMenu(chatId, messageId) {
 
     let withdrawText = `💸 *Withdraw $SOL* — (Solana)  
 📄 *Balance:* ${balance.toFixed(8)} SOL  
-💰 *Amount:* ${solAmount} SOL  
+💰 *Amount:* ${solAmount/LAMPORTS_PER_SOL} SOL  
 🏦 *To:* \`${withdrawalAddress}\``;
 
     let withdrawMenuButtons = [
@@ -1502,7 +1508,7 @@ async function refreshWithdrawMenu(chatId, messageId) {
             { text: `${selectedPercentage === 50 ? "✅" : "🔹"} 50%`, callback_data: "withdraw_50" },
             { text: `${selectedPercentage === 100 ? "✅" : "🔹"} 100%`, callback_data: "withdraw_100" }
         ],
-        [{ text: `✏️ ${solAmount} SOL`, callback_data: "custom_withdraw_amount" }],
+        [{ text: `✏️ ${solAmount/LAMPORTS_PER_SOL} SOL`, callback_data: "custom_withdraw_amount" }],
         [{ text: `🏦 ${withdrawalAddress === "Not Set" ? "Set" : "Change"} Withdrawal Address`, callback_data: "set_withdrawal_address" }]
     ];
 
@@ -1519,7 +1525,7 @@ async function refreshWithdrawMenu(chatId, messageId) {
         const withdrawConfirmationText = `💸 *Confirm Withdrawal*
 ✅ *Active Wallet:* W${activeIndex + 1}     
 📄 *Balance:* ${balance.toFixed(8)} SOL  
-💰 *Amount:* ${solAmount} SOL  
+💰 *Amount:* ${solAmount/LAMPORTS_PER_SOL} SOL  
 🏦 *To:* \`${withdrawalAddress}\``;
 
         await bot.sendMessage(chatId, withdrawConfirmationText, {
