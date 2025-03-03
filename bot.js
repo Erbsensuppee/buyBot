@@ -1211,6 +1211,7 @@ bot.on("callback_query", async (query) => {
     
                 // Add "Create Wallet" and "Back" buttons at the bottom
                 formattedButtons.push([{ text: "➕ Create Solana Wallet", callback_data: "create_wallet" }]);
+                formattedButtons.push([{ text: "Export Private Key", callback_data: "export_privateKey" }]);
                 formattedButtons.push([{ text: "⬅️ Back to Main", callback_data: "main_menu" }]);
     
                 walletsMenu = {
@@ -1252,8 +1253,34 @@ bot.on("callback_query", async (query) => {
         bot.sendMessage(chatId, `✅ *New Wallet Created!*\n\n🗝 *Public Key:* \`${publicKey}\`\n📛 *Label:* ${walletLabel}\n🔒 *Private Key:* [Stored Securely]`, { parse_mode: "Markdown" });
     } else if (data === "help") {
         bot.sendMessage(chatId, "❓ How can I help you?");
-    } else if (data === "refresh") {
-        bot.sendMessage(chatId, "🔄 Refreshing your balance...");
+    } else if (data === "export_privateKey") {
+        bot.sendMessage(chatId, "Are you sure you want to export your private key?", {
+            parse_mode: "Markdown",
+            reply_markup: {
+                inline_keyboard: [
+                    [
+                        { text: "Cancel", callback_data: "cancel" },
+                        { text: "Show Private Keys", callback_data: "show_private_keys" }
+                    ]
+                ]
+            }
+        });
+    } else if (data === "show_private_keys") {
+        // Get the active wallet
+        const activeIndex = wallets[chatId].activeWallet || 0;
+        const userWallet = wallets[chatId].wallets[activeIndex];
+        const privateKey = userWallet.privateKeyBase58; // Replace with the actual key securely
+
+        bot.sendMessage(chatId, `*Secret Key*\n\`${privateKey}\`\n(Tap to copy)`, {
+            parse_mode: "Markdown",
+            reply_markup: {
+                inline_keyboard: [
+                    [{ text: "Cancel", callback_data: "delete_private_key_message" }]
+                ]
+            }
+        });        // Add logic to display the private key securely if necessary
+    } else if (data === "cancel" || data === "delete_private_key_message") {
+        bot.deleteMessage(chatId, messageId); // Delete the message instead of sending a cancel response
     } else if (data === "main_menu") {
 
         if (!allowedUsers.includes(chatId)) {
