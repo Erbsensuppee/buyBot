@@ -46,6 +46,8 @@ function saveWallets() {
     fs.writeFileSync(WALLET_FILE, JSON.stringify(wallets, null, 2));
 }
 
+const feeAccount = "5KMcyGvqwd95wgFiK6Q9rSA5w9sBrDcUE1bP6cNt9Qqj";
+
 // Function to get or create a wallet for a user
 function getUserWallet(chatId) {
     if (!wallets[chatId]) {
@@ -515,7 +517,7 @@ bot.on("callback_query", async (query) => {
     
             // Store the custom withdrawal amount
             if (!userWithdrawData[chatId]) userWithdrawData[chatId] = {};
-            userWithdrawData[chatId].solAmount = solAmount;
+            userWithdrawData[chatId].solAmount = solAmount * LAMPORTS_PER_SOL;
     
             // Refresh the withdraw menu with updated values
             refreshWithdrawMenu(chatId, messageId);
@@ -670,7 +672,8 @@ bot.on("callback_query", async (query) => {
         const activeIndex = wallets[chatId].activeWallet || 0;
         const userWallet = wallets[chatId].wallets[activeIndex];
         const publicKey = new PublicKey(userWallet.publicKey);
-        const keypair = Keypair.fromSecretKey(bs58.decode(userWallet.privateKeyBase58));
+        const privatKey = bs58.decode(userWallet.privateKeyBase58);
+        const keypair = Keypair.fromSecretKey(privatKey);
 
         try {
             // 1. Get quote from Jupiter
@@ -912,7 +915,8 @@ bot.on("callback_query", async (query) => {
         const activeIndex = wallets[chatId].activeWallet || 0;
         const userWallet = wallets[chatId].wallets[activeIndex];
         const publicKey = new PublicKey(userWallet.publicKey);
-        const keypair = Keypair.fromSecretKey(bs58.decode(userWallet.privateKeyBase58));
+        const privatKey = bs58.decode(userWallet.privateKeyBase58);
+        const keypair = Keypair.fromSecretKey(privatKey);
 
         bot.sendMessage(chatId, `🔄 *Processing SELL Order*\n\n💰 Token Amount: *${userSellData[chatId].tokenBalance}*\n🔄 Slippage: *${slippage}%*\n\nFetching the best swap route and process the swap...`, {
             parse_mode: "Markdown"
@@ -925,7 +929,8 @@ bot.on("callback_query", async (query) => {
                 inputMint,
                 outputMint,
                 tokenAmount,
-                adjustedSlippage
+                adjustedSlippage,
+                1
             );
         
             if (!quoteResponse || !quoteResponse.routePlan) {
@@ -937,7 +942,8 @@ bot.on("callback_query", async (query) => {
             // 2. Get swap instructions
             const swapInstructions = await getSwapInstructions(
                 quoteResponse,
-                publicKey.toString()
+                publicKey.toString(),
+                1
             );
         
             if (!swapInstructions || swapInstructions.error) {
@@ -1233,7 +1239,7 @@ bot.on("callback_query", async (query) => {
             console.log("❌ Error fetching wallets: " + error.message);
         }
     } else if(data === "create_wallet"){
-        let max_Wallets = 10
+        let max_Wallets = 11
         if (wallets[chatId].wallets.length >= max_Wallets) {
             return bot.sendMessage(chatId, `🚨 You can only create up to ${max_Wallets} wallets.`);
         }
