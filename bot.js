@@ -24,7 +24,7 @@ const {
     calculateSolana
  } = require("./src/helperFunctions.js")
 
-const allowedUsers = process.env.ALLOWED_USERS ? process.env.ALLOWED_USERS.split(',').map(Number) : [];
+// const allowedUsers = process.env.ALLOWED_USERS ? process.env.ALLOWED_USERS.split(',').map(Number) : [];
 const bot = new TelegramBot(process.env.TELEGRAM_BOT_TOKEN, { polling: true });
 
 const connection = new Connection(process.env.HELIUS_RPC_URL);
@@ -474,9 +474,9 @@ bot.on("callback_query", async (query) => {
     // Acknowledge the callback immediately to prevent Telegram from resending it
     bot.answerCallbackQuery(query.id, { text: "⏳ Processing...", show_alert: false });
 
-    if (!allowedUsers.includes(chatId)) {
-        return bot.sendMessage(chatId, "🚫 Access denied. You are not authorized to use this bot.");
-    }
+    // if (!allowedUsers.includes(chatId)) {
+    //     return bot.sendMessage(chatId, "🚫 Access denied. You are not authorized to use this bot.");
+    // }
 
     if (data === "buy") {
         if (!wallets[chatId] || !wallets[chatId].wallets || wallets[chatId].wallets.length === 0) {
@@ -1289,9 +1289,9 @@ bot.on("callback_query", async (query) => {
         bot.deleteMessage(chatId, messageId); // Delete the message instead of sending a cancel response
     } else if (data === "main_menu") {
 
-        if (!allowedUsers.includes(chatId)) {
-            return bot.sendMessage(chatId, "🚫 Access denied. You are not authorized to use this bot.");
-        }
+        // if (!allowedUsers.includes(chatId)) {
+        //     return bot.sendMessage(chatId, "🚫 Access denied. You are not authorized to use this bot.");
+        // }
     
         try {
             // Ensure wallets exist for the user
@@ -1356,9 +1356,9 @@ Click on the Refresh button to update your current balance.
 bot.onText(/\/start/, async (msg) => {
     const chatId = msg.chat.id;
 
-    if (!allowedUsers.includes(msg.from.id)) {
-        return bot.sendMessage(chatId, "🚫 Access denied. You are not authorized to use this bot.");
-    }
+    // if (!allowedUsers.includes(msg.from.id)) {
+    //     return bot.sendMessage(chatId, "🚫 Access denied. You are not authorized to use this bot.");
+    // }
 
     try {
         // Ensure wallets exist for the user
@@ -1417,9 +1417,9 @@ Click on the Refresh button to update your current balance.
 
 // Check SOL balance of current wallet
 bot.onText(/\/balance/, async (msg) => {
-    if (!allowedUsers.includes(msg.from.id)) {
-        return bot.sendMessage(msg.chat.id, "🚫 Access denied. You are not authorized to use this bot.");
-    }
+    // if (!allowedUsers.includes(msg.from.id)) {
+    //     return bot.sendMessage(msg.chat.id, "🚫 Access denied. You are not authorized to use this bot.");
+    // }
     try {
         const balance = await connection.getBalance(wallet.publicKey);
         bot.sendMessage(msg.chat.id, `Your balance: ${balance / LAMPORTS_PER_SOL} SOL`);
@@ -1430,73 +1430,73 @@ bot.onText(/\/balance/, async (msg) => {
 // Buy a token
 bot.onText(/\/buy/, async (msg) => {
     const chatId = msg.chat.id;
-    if (!allowedUsers.includes(msg.from.id)) {
-        return bot.sendMessage(chatId, "🚫 Access denied. You are not authorized to use this bot.");
-    }
-    bot.sendMessage(chatId, "Buy coming soon!\n");
+    // if (!allowedUsers.includes(msg.from.id)) {
+    //     return bot.sendMessage(chatId, "🚫 Access denied. You are not authorized to use this bot.");
+    // }
+    bot.sendMessage(chatId, "Message Buy coming soon!\n");
 })
 // Sell a token
 bot.onText(/\/sell/, async (msg) => {
     const chatId = msg.chat.id;
-    if (!allowedUsers.includes(msg.from.id)) {
-        return bot.sendMessage(chatId, "🚫 Access denied. You are not authorized to use this bot.");
-    }
-    bot.sendMessage(chatId, "sell coming soon!\n");
+    // if (!allowedUsers.includes(msg.from.id)) {
+    //     return bot.sendMessage(chatId, "🚫 Access denied. You are not authorized to use this bot.");
+    // }
+    bot.sendMessage(chatId, "Message sell coming soon!\n");
 })
 // View detailed information about your tokens
 bot.onText(/\/positions/, async (msg) => {
     const chatId = msg.chat.id;
-    if (!allowedUsers.includes(msg.from.id)) {
-        return bot.sendMessage(chatId, "🚫 Access denied. You are not authorized to use this bot.");
-    }
+    // if (!allowedUsers.includes(msg.from.id)) {
+    //     return bot.sendMessage(chatId, "🚫 Access denied. You are not authorized to use this bot.");
+    // }
     bot.sendMessage(chatId, "positions coming soon!\n");
 })
 // Configure your settings
 bot.onText(/\/settings/, async (msg) => {
     const chatId = msg.chat.id;
-    if (!allowedUsers.includes(msg.from.id)) {
-        return bot.sendMessage(chatId, "🚫 Access denied. You are not authorized to use this bot.");
-    }
+    // if (!allowedUsers.includes(msg.from.id)) {
+    //     return bot.sendMessage(chatId, "🚫 Access denied. You are not authorized to use this bot.");
+    // }
     bot.sendMessage(chatId, "settings coming soon!\n");
 })
 // Snipe [CA]
 bot.onText(/\/snipe/, async (msg) => {
     const chatId = msg.chat.id;
-    if (!allowedUsers.includes(msg.from.id)) {
-        return bot.sendMessage(chatId, "🚫 Access denied. You are not authorized to use this bot.");
-    }
+    // if (!allowedUsers.includes(msg.from.id)) {
+    //     return bot.sendMessage(chatId, "🚫 Access denied. You are not authorized to use this bot.");
+    // }
     bot.sendMessage(chatId, "snipe coming soon!\n");
 })
 // Burn unwanted tokens to claim SOL
 bot.onText(/\/burn/, async (msg) => {
     const chatId = msg.chat.id;
-    if (!allowedUsers.includes(msg.from.id)) {
-        return bot.sendMessage(chatId, "🚫 Access denied. You are not authorized to use this bot.");
-    }
+    // if (!allowedUsers.includes(msg.from.id)) {
+    //     return bot.sendMessage(chatId, "🚫 Access denied. You are not authorized to use this bot.");
+    // }
     bot.sendMessage(chatId, "burn coming soon!\n");
 })
 // Withdraw tokens or SOL
 bot.onText(/\/withdraw/, async (msg) => {
     const chatId = msg.chat.id;
-    if (!allowedUsers.includes(msg.from.id)) {
-        return bot.sendMessage(chatId, "🚫 Access denied. You are not authorized to use this bot.");
-    }
-    bot.sendMessage(chatId, "withdraw coming soon!\n");
+    // if (!allowedUsers.includes(msg.from.id)) {
+    //     return bot.sendMessage(chatId, "🚫 Access denied. You are not authorized to use this bot.");
+    // }
+    bot.sendMessage(chatId, "Message withdraw coming soon!\n");
 })
 // FAQ and Telegram channel
 bot.onText(/\/help/, async (msg) => {
     const chatId = msg.chat.id;
-    if (!allowedUsers.includes(msg.from.id)) {
-        return bot.sendMessage(chatId, "🚫 Access denied. You are not authorized to use this bot.");
-    }
+    // if (!allowedUsers.includes(msg.from.id)) {
+    //     return bot.sendMessage(chatId, "🚫 Access denied. You are not authorized to use this bot.");
+    // }
     bot.sendMessage(chatId, "help coming soon!\n");
 })
 // Backup bots in case of lag or issues
 bot.onText(/\/backup/, async (msg) => {
     const chatId = msg.chat.id;
-    if (!allowedUsers.includes(msg.from.id)) {
-        return bot.sendMessage(chatId, "🚫 Access denied. You are not authorized to use this bot.");
-    }
+    // if (!allowedUsers.includes(msg.from.id)) {
+    //     return bot.sendMessage(chatId, "🚫 Access denied. You are not authorized to use this bot.");
+    // }
     bot.sendMessage(chatId, "backup coming soon!\n");
 })
 
