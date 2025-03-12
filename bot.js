@@ -424,6 +424,11 @@ async function showSellMenu(chatId) {
 
 bot.on('message', async (msg) => {
     const chatId = msg.chat.id;
+    // Check if the message contains text
+    if (typeof msg.text !== 'string') {
+        bot.sendMessage(chatId, "I only process text messages.");
+        return;
+    }
     const text = msg.text.trim();
 
     // Ignore commands (messages that start with "/")
@@ -1502,6 +1507,11 @@ bot.onText(/\/backup/, async (msg) => {
 
 bot.on("message", async (msg) => {
     const chatId = msg.chat.id;
+    // Check if the message contains text
+    if (!msg.text) {
+        bot.sendMessage(chatId, "I only process text messages.");
+        return;
+    }
     const text = msg.text.trim();
 
     // Check if user is in "custom withdraw amount" mode
