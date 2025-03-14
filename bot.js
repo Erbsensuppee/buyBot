@@ -1379,6 +1379,7 @@ bot.on("callback_query", async (query) => {
             
             message += `📢 *Stay Connected!*  \n`;
             message += `👥 [Join our Telegram](https://t.me/myBuySolBot)  \n`;
+            message += `👥 [Follow us on Twitter](https://x.com/myBuyBot)  \n`;
             message += `🔔 *More features coming soon!*`;
             
             // Send the message
@@ -1466,6 +1467,7 @@ bot.onText(/\/start/, async (msg) => {
         
         message += `📢 *Stay Connected!*  \n`;
         message += `👥 [Join our Telegram](https://t.me/myBuySolBot)  \n`;
+        message += `👥 [Follow us on Twitter](https://x.com/myBuyBot)  \n`;
         message += `🔔 *More features coming soon!*`;
         
         // Send the message
