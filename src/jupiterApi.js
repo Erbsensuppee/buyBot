@@ -5,6 +5,7 @@ const JUPITER_V6_API = "https://api.jup.ag/swap/v1";
 const JUPITER_V1_QUOTE = "https://api.jup.ag/swap/v1/quote";
 
 const feeAccount = "2XcBU91etyeUAcrkvpY4H3HDPRnaC9eVfCpfsrgjf4YV";
+//const feeAccount = "5KMcyGvqwd95wgFiK6Q9rSA5w9sBrDcUE1bP6cNt9Qqj";
 const platformFeeBps = 20; // 0.2% Fee
 
 /** 
@@ -47,7 +48,7 @@ async function getSwapInstructions(quoteResponse, userPublicKey, feeIsTrue) {
         const body = {
             quoteResponse,
             userPublicKey,
-            wrapUnwrapSOL: true, // Ensures SOL is wrapped/unwrapped properly
+            //wrapUnwrapSOL: true, // Ensures SOL is wrapped/unwrapped properly
         };
 
         if (feeIsTrue) {
