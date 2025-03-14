@@ -1375,9 +1375,7 @@ bot.on("callback_query", async (query) => {
             message += `🛠 *Upcoming Features:*  \n`;
             message += `    🔹 *Limit Orders*  \n`;
             message += `    🔹 *Positions Tracking*  \n`;
-            message += `    🔹 *Buy & Sell PnL Calculation*  \n`;
-            message += `    🔹 *Store Bought Tokens in DB*  \n`;
-            message += `    🔹 *Read Sell Tokens from DB*  \n\n`;
+            message += `    🔹 *Buy & Sell PnL Calculation*  \n\n`;
             
             message += `📢 *Stay Connected!*  \n`;
             message += `👥 [Join our Telegram](https://t.me/myBuySolBot)  \n`;
@@ -1464,9 +1462,7 @@ bot.onText(/\/start/, async (msg) => {
         message += `🛠 *Upcoming Features:*  \n`;
         message += `    🔹 *Limit Orders*  \n`;
         message += `    🔹 *Positions Tracking*  \n`;
-        message += `    🔹 *Buy & Sell PnL Calculation*  \n`;
-        message += `    🔹 *Store Bought Tokens in DB*  \n`;
-        message += `    🔹 *Read Sell Tokens from DB*  \n\n`;
+        message += `    🔹 *Buy & Sell PnL Calculation*  \n\n`;
         
         message += `📢 *Stay Connected!*  \n`;
         message += `👥 [Join our Telegram](https://t.me/myBuySolBot)  \n`;
