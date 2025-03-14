@@ -1357,16 +1357,20 @@ bot.on("callback_query", async (query) => {
 
             message += `💰 *Solana Wallet Overview*\n`;
             message += `📜 *Public Key:*  \n\`${publicKey}\` *(Tap to copy)*  \n`;
-            message += `📈 *Balance:* \`${balance.toFixed(4)} SOL\`  *(~$0,000.00)*  \n\n`;
+            message += `📈 *Balance:* \`${balance.toFixed(4)} SOL\`  \n\n`;
             
             message += `✨ *Features:*  \n`;
-            message += `    ✅ *Buy Tokens*  \n`;
-            message += `    ✅ *Sell Tokens*  \n`;
+            message += `    ✅ *Buy Tokens (0% Fees!)*  \n`;
+            message += `    ✅ *Sell Tokens (Only 0.2% Fee!)*  \n`;
             message += `    ✅ *Create up to 10 Wallets*  \n`;
             message += `    ✅ *Withdraw Custom SOL Amount*  \n`;
             message += `    ✅ *Withdraw SOL by Percentage*  \n`;
             message += `    ✅ *Withdraw*  \n`;
             message += `    ✅ *Show Private Key*  \n\n`;
+
+            message += `⚖️ *Trading Fees:*  \n`;
+            message += `    ✅ *0% Fee* on Buys  \n`;
+            message += `    💸 *0.2% Fee* on Sells  \n\n`;
             
             message += `🛠 *Upcoming Features:*  \n`;
             message += `    🔹 *Limit Orders*  \n`;
@@ -1442,16 +1446,20 @@ bot.onText(/\/start/, async (msg) => {
 
         message += `💰 *Solana Wallet Overview*\n`;
         message += `📜 *Public Key:*  \n\`${publicKey}\` *(Tap to copy)*  \n`;
-        message += `📈 *Balance:* \`${balance.toFixed(4)} SOL\`  *(~$0,000.00)*  \n\n`;
+        message += `📈 *Balance:* \`${balance.toFixed(4)} SOL\`  \n\n`;
         
         message += `✨ *Features:*  \n`;
-        message += `    ✅ *Buy Tokens*  \n`;
-        message += `    ✅ *Sell Tokens*  \n`;
+        message += `    ✅ *Buy Tokens (0% Fees!)*  \n`;
+        message += `    ✅ *Sell Tokens (Only 0.2% Fee!)*  \n`;
         message += `    ✅ *Create up to 10 Wallets*  \n`;
         message += `    ✅ *Withdraw Custom SOL Amount*  \n`;
         message += `    ✅ *Withdraw SOL by Percentage*  \n`;
         message += `    ✅ *Withdraw*  \n`;
         message += `    ✅ *Show Private Key*  \n\n`;
+
+        message += `⚖️ *Trading Fees:*  \n`;
+        message += `    ✅ *0% Fee* on Buys  \n`;
+        message += `    💸 *0.2% Fee* on Sells  \n\n`;
         
         message += `🛠 *Upcoming Features:*  \n`;
         message += `    🔹 *Limit Orders*  \n`;
