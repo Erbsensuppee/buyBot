@@ -94,6 +94,72 @@ async function getTokenBalanceFromTransaction(connection, walletAddress, tokenMi
   }
 }
 
+async function getBuyTransactionDetails(connection, walletAddress, tokenMint, txid) {
+  const wallet = typeof walletAddress === "string" ? new PublicKey(walletAddress) : walletAddress;
+  const mint = typeof tokenMint === "string" ? new PublicKey(tokenMint) : tokenMint;
+
+  try {
+      const parsedTx = await connection.getParsedTransaction(txid, {
+          commitment: "confirmed",
+          maxSupportedTransactionVersion: 0
+      });
+
+      const postBalance = parsedTx?.meta?.postTokenBalances?.find(
+          (entry) =>
+              entry.owner === wallet.toBase58() &&
+              entry.mint === mint.toBase58()
+      );
+
+      const preSol = parsedTx?.meta?.preBalances?.[0] || 0;
+      const postSol = parsedTx?.meta?.postBalances?.[0] || 0;
+      const solSpentLamports = Math.max(0, preSol - postSol);
+
+      const amount = postBalance?.uiTokenAmount?.amount
+          ? Number(postBalance.uiTokenAmount.amount)
+          : 0;
+
+      return { tokenAmount: amount, solSpentLamports };
+  } catch (err) {
+      console.error("❌ Failed to fetch or parse buy transaction:", err);
+      return { tokenAmount: 0, solSpentLamports: 0 };
+  }
+}
+
+async function getSellTransactionDetails(connection, walletAddress, tokenMint, txid) {
+  const wallet = typeof walletAddress === "string" ? new PublicKey(walletAddress) : walletAddress;
+  const mint = typeof tokenMint === "string" ? new PublicKey(tokenMint) : tokenMint;
+
+  try {
+      const parsedTx = await connection.getParsedTransaction(txid, {
+          commitment: "confirmed",
+          maxSupportedTransactionVersion: 0
+      });
+
+      const accountKeys = parsedTx?.transaction?.message?.accountKeys || [];
+      const userIndex = accountKeys.findIndex(
+          (key) => key.pubkey?.toBase58?.() === wallet.toBase58()
+      );
+
+      const preSol = parsedTx?.meta?.preBalances?.[userIndex] || 0;
+      const postSol = parsedTx?.meta?.postBalances?.[userIndex] || 0;
+      const solReceivedLamports = Math.max(0, postSol - preSol);
+
+      const postBalance = parsedTx?.meta?.postTokenBalances?.find(
+          (entry) =>
+              entry.owner === wallet.toBase58() &&
+              entry.mint === mint.toBase58()
+      );
+
+      const newTokenBalance = postBalance?.uiTokenAmount?.amount
+          ? Number(postBalance.uiTokenAmount.amount)
+          : 0;
+
+      return { solReceivedLamports, newTokenBalance };
+  } catch (err) {
+      console.error("❌ Failed to fetch or parse sell transaction:", err);
+      return { solReceivedLamports: 0, newTokenBalance: 0 };
+  }
+}
 
 // Optional: dummy fallback symbol resolver (you could replace this with a real token list)
 async function resolveSymbol(mint) {
@@ -272,5 +338,7 @@ module.exports = {
     getTokenBalanceFromTransaction,
     storeTokenData,
     updateTokenData,
-    getUserTokens
+    getUserTokens,
+    getSellTransactionDetails,
+    getBuyTransactionDetails
 };

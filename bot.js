@@ -25,7 +25,9 @@ const {
     getUserTokens,
     getTokenBalanceFromTransaction,
     updateTokenData,
-    storeTokenData
+    storeTokenData,
+    getSellTransactionDetails,
+    getBuyTransactionDetails
  } = require("./src/helperFunctions.js");
 const { performSwapBuy, performSwapSell } = require('./src/swap.js');
 const { showPositionMenu } = require("./src/menue/positons.js")
@@ -101,7 +103,7 @@ async function fetchTokenPrice(chatId, tokenMint) {
         const userWallet = wallets[chatId].wallets[activeIndex];
         const publicKey = userWallet.publicKey;
 
-        let solAmount = userBuyData[chatId].solAmount || 0.001;
+        let solAmount = userBuyData[chatId].solAmount || 0.01;
         let slippage = userBuyData[chatId].slippage || 5;
         const balance = await checkWallet(publicKey, connection);
         userBuyData[chatId].userBalance = balance;
@@ -662,7 +664,7 @@ bot.on("callback_query", async (query) => {
         if (!userBuyData[chatId]) userBuyData[chatId] = {};
 
         // Set default values if they are missing
-        const solAmount = userBuyData[chatId].solAmount || 0.001;
+        const solAmount = userBuyData[chatId].solAmount || 0.01;
         const slippage = userBuyData[chatId].slippage || 5;
         const adjustedAmount = Math.floor(solAmount * LAMPORTS_PER_SOL); // Convert to lamports
         const adjustedSlippage = slippage * 100;
@@ -684,20 +686,30 @@ bot.on("callback_query", async (query) => {
             bot.sendMessage(chatId, "❌ Swap failed. Please try again.");
         }
         try {
-            //await storeAmmTokenData(outputMint, filePath, priceInSol);
-            const filePath = `./data/${chatId}.json`; // main token data
-            const debugFilePath = `./data/${chatId}_debug.json`; // user-specific debug file
-            const tokenBalance = await getTokenBalanceFromTransaction(
+            const filePath = `./data/${chatId}.json`;
+            const debugFilePath = `./data/${chatId}_debug.json`;
+        
+            const { tokenAmount, solSpentLamports } = await getBuyTransactionDetails(
                 connection,
                 keypair.publicKey,
                 outputMint,
                 buySignature
-              );
-              
-            const storeData = await storeTokenData(outputMint, filePath, tokenBalance, debugFilePath, solAmount, userBuyData[chatId].tokenSymbol);
-              
+            );
+        
+            // ✅ Subtract actual SOL spent
+            decreaseSolBalanceForWallet(chatId, activeIndex, solSpentLamports);
+        
+            // ✅ Store token with accurate data
+            await storeTokenData(
+                outputMint,
+                filePath,
+                tokenAmount,
+                debugFilePath,
+                solSpentLamports,
+                userBuyData[chatId].tokenSymbol
+            );
         } catch (error) {
-            console.warn("⚠️ Failed to store token data:", error);
+            console.warn("⚠️ Failed to finalize buy transaction:", error);
         }
         userBuyData[chatId].tokenSymbol
         let tmpBuySolAmount = userBuyData[chatId]?.solAmount; // Default solAmount
@@ -773,7 +785,7 @@ bot.on("callback_query", async (query) => {
         });
 
         // Set default values if they are missing
-        const tokenAmount = Math.floor(userSellData[chatId].sellTokenAmount || 0.001);
+        const tokenAmount = Math.floor(userSellData[chatId].sellTokenAmount || 0.01);
         const slippage = userSellData[chatId].slippage || 5;
         const adjustedSlippage = slippage * 100;
         //adjustedAmount = amount * Math.pow(10, inputTokenInfo.decimals);
@@ -800,7 +812,8 @@ bot.on("callback_query", async (query) => {
         try {
             //await storeAmmTokenData(outputMint, filePath, priceInSol);
             const filePath = `./data/${chatId}.json`; // main token data
-            const newTokenBalance = await getTokenBalanceFromTransaction(connection, keypair.publicKey, inputMint, sellSignature);
+            const { solReceivedLamports, newTokenBalance } = await getSellTransactionDetails(connection, keypair.publicKey, inputMint, sellSignature);
+            await increaseSolBalanceForWallet(chatId, activeIndex, solReceivedLamports);
             const removeToken = await updateTokenData(inputMint, filePath, newTokenBalance);
         } catch (error) {
             console.warn("⚠️ Failed to store token data:", error);
@@ -831,10 +844,11 @@ bot.on("callback_query", async (query) => {
             const activeIndex = wallets[chatId].activeWallet || 0;
             const userWallet = wallets[chatId].wallets[activeIndex];
             const publicKey = userWallet.publicKey;
-            const balance = await checkWallet(publicKey, connection);
+            const balanceLamports = userWallet.solBalanceLamports || 0;
+            const balanceSol = balanceLamports / LAMPORTS_PER_SOL;
     
             let withdrawText = `💸 *Withdraw $SOL* — (Solana)  
-    📄 *Balance:* ${balance.toFixed(4)} SOL`;
+    📄 *Balance:* ${balanceSol.toFixed(4)} SOL`;
     
             const selectedPercentage = userWithdrawData[chatId]?.selectedPercentage || "Not Set"; // Default 100%
     
@@ -1008,7 +1022,8 @@ bot.on("callback_query", async (query) => {
             const publicKey = userWallet.publicKey;
     
             // Fetch balance
-            const balance = userWallet.solBalance || 0;
+            const balanceLamports = userWallet.solBalanceLamports || 0;
+            const balanceSol = balanceLamports / LAMPORTS_PER_SOL;                      
     
             const options = {
                 reply_markup: {
@@ -1028,7 +1043,7 @@ bot.on("callback_query", async (query) => {
 
             message += `💰 *Solana Wallet Overview*\n`;
             message += `📜 *Public Key:*  \n\`${publicKey}\` *(Tap to copy)*  \n`;
-            message += `📈 *Balance:* \`${balance.toFixed(4)} SOL\`  \n\n`;
+            message += `📈 *Balance:* \`${balanceSol.toFixed(4)} SOL\`  \n\n`;
             
             message += `✨ *Features:*  \n`;
             message += `    ✅ *Buy Tokens (0% Fees!)*  \n`;
@@ -1097,7 +1112,8 @@ bot.onText(/\/start/, async (msg) => {
         const publicKey = userWallet.publicKey;
 
         // Fetch balance
-        const balance = userWallet.solBalance || 0; // ✅ use cached balance
+        const balanceLamports = userWallet.solBalanceLamports || 0;
+        const balanceSol = balanceLamports / LAMPORTS_PER_SOL;
 
         const options = {
             reply_markup: {
@@ -1117,7 +1133,7 @@ bot.onText(/\/start/, async (msg) => {
 
         message += `💰 *Solana Wallet Overview*\n`;
         message += `📜 *Public Key:*  \n\`${publicKey}\` *(Tap to copy)*  \n`;
-        message += `📈 *Balance:* \`${balance.toFixed(4)} SOL\`  \n\n`;
+        message += `📈 *Balance:* \`${balanceSol.toFixed(4)} SOL\`  \n\n`;
         
         message += `✨ *Features:*  \n`;
         message += `    ✅ *Buy Tokens (0% Fees!)*  \n`;
@@ -1318,11 +1334,5 @@ async function refreshWithdrawMenu(chatId, messageId) {
         });
     }
 }
-
-
-
-
-
-
 
 console.log("Telegram bot is running...");

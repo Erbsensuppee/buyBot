@@ -25,7 +25,7 @@ function saveWallets(wallets) {
     fs.writeFileSync(WALLET_FILE, JSON.stringify(wallets, null, 2));
 }
 
-function increaseSolBalanceForWallet(chatId, walletIndex, lamports) {
+async function increaseSolBalanceForWallet(chatId, walletIndex, lamports) {
     const wallets = loadWallets();
     const wallet = wallets[chatId]?.wallets?.[walletIndex];
 
@@ -39,7 +39,7 @@ function increaseSolBalanceForWallet(chatId, walletIndex, lamports) {
     console.log(`💾 Increased balance for [${chatId}] W${walletIndex + 1}: +${lamports} lamports`);
 }
 
-function decreaseSolBalanceForWallet(chatId, walletIndex, lamports) {
+async function decreaseSolBalanceForWallet(chatId, walletIndex, lamports) {
     const wallets = loadWallets();
     const wallet = wallets[chatId]?.wallets?.[walletIndex];
 
