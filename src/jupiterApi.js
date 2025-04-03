@@ -37,6 +37,58 @@ async function getQuote(inputMint, outputMint, amount, slippageBps, feeIsTrue) {
     }
 }
 
+/** 
+ * Get a swap quote from Jupiter.
+ * @param {string} inputMint - Token being swapped.
+ * @param {string} outputMint - Token to receive.
+ * @param {number} amount - Amount of input token.
+ * @param {number} slippageBps - Slippage in basis points.
+ * @param {boolean} feeIsTrue - Whether to include the platform fee.
+ */
+async function getBuyQuote(inputMint, outputMint, amount, slippageBps) {
+    try {
+        const params = {
+            inputMint,
+            outputMint,
+            amount,
+            slippageBps,
+        };
+
+        const response = await axios.get(JUPITER_V1_QUOTE, { params });
+        return response.data;
+    } catch (error) {
+        console.error("❌ Error fetching quote:", error.response ? error.response.data : error.message);
+        return null;
+    }
+}
+
+/** 
+ * Get a swap quote from Jupiter.
+ * @param {string} inputMint - Token being swapped.
+ * @param {string} outputMint - Token to receive.
+ * @param {number} amount - Amount of input token.
+ * @param {number} slippageBps - Slippage in basis points.
+ * @param {boolean} feeIsTrue - Whether to include the platform fee.
+ */
+async function getSellQuote(inputMint, outputMint, amount, slippageBps) {
+    try {
+        const params = {
+            inputMint,
+            outputMint,
+            amount,
+            slippageBps,
+            platformFeeBps
+        };
+
+        const response = await axios.get(JUPITER_V1_QUOTE, { params });
+        return response.data;
+    } catch (error) {
+        console.error("❌ Error fetching quote:", error.response ? error.response.data : error.message);
+        return null;
+    }
+}
+
+
 /**
  * Get swap instructions from Jupiter.
  * @param {Object} quoteResponse - Response from Jupiter quote API.
@@ -54,6 +106,52 @@ async function getSwapInstructions(quoteResponse, userPublicKey, feeIsTrue) {
         if (feeIsTrue) {
             body.feeAccount = feeAccount;
         }
+
+        const response = await axios.post(`${JUPITER_V6_API}/swap-instructions`, body);
+        return response.data;
+    } catch (error) {
+        console.error("❌ Error fetching swap instructions:", error.response ? error.response.data : error.message);
+        return null;
+    }
+}
+
+/**
+ * Get swap instructions from Jupiter.
+ * @param {Object} quoteResponse - Response from Jupiter quote API.
+ * @param {string} userPublicKey - User's public key.
+ * @param {boolean} feeIsTrue - Whether to include fee.
+ */
+async function getBuySwapInstructions(quoteResponse, userPublicKey) {
+    try {
+        const body = {
+            quoteResponse,
+            userPublicKey,
+            wrapUnwrapSOL: true,
+        };
+
+        const response = await axios.post(`${JUPITER_V6_API}/swap-instructions`, body);
+        return response.data;
+    } catch (error) {
+        console.error("❌ Error fetching swap instructions:", error.response ? error.response.data : error.message);
+        return null;
+    }
+}
+
+/**
+ * Get swap instructions from Jupiter.
+ * @param {Object} quoteResponse - Response from Jupiter quote API.
+ * @param {string} userPublicKey - User's public key.
+ * @param {boolean} feeIsTrue - Whether to include fee.
+ */
+async function getSellSwapInstructions(quoteResponse, userPublicKey) {
+    try {
+        const body = {
+            quoteResponse,
+            userPublicKey,
+            wrapUnwrapSOL: true, // Ensures SOL is wrapped/unwrapped properly
+            feeAccount,
+
+        };
 
         const response = await axios.post(`${JUPITER_V6_API}/swap-instructions`, body);
         return response.data;
@@ -88,4 +186,10 @@ async function getSwapResponse(quoteResponse, userPublicKey, feeIsTrue) {
     }
 }
 
-module.exports = { getQuote, getSwapInstructions, getSwapResponse };
+module.exports = { getQuote, 
+    getSwapInstructions, 
+    getSwapResponse, 
+    getBuyQuote, 
+    getSellQuote,
+    getBuySwapInstructions,
+    getSellSwapInstructions };
