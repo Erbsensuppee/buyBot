@@ -3,6 +3,8 @@ const axios = require("axios");
 const JUPITER_V6_API_PUMP = "https://quote-api.jup.ag/v6";
 const JUPITER_V6_API = "https://api.jup.ag/swap/v1";
 const JUPITER_V1_QUOTE = "https://api.jup.ag/swap/v1/quote";
+const JUPITER_V1_SWAP = "https://api.jup.ag/swap/v1/swap"
+
 
 const feeAccount = "2XcBU91etyeUAcrkvpY4H3HDPRnaC9eVfCpfsrgjf4YV";
 //const feeAccount = "5KMcyGvqwd95wgFiK6Q9rSA5w9sBrDcUE1bP6cNt9Qqj";
@@ -121,20 +123,34 @@ async function getSwapInstructions(quoteResponse, userPublicKey, feeIsTrue) {
  * @param {string} userPublicKey - User's public key.
  * @param {boolean} feeIsTrue - Whether to include fee.
  */
-async function getBuySwapInstructions(quoteResponse, userPublicKey) {
+async function getBuySwapInstructions(quoteResponse, userPublicKey, buySlippage) {
     try {
-        const body = {
+        const response = await axios.post(
+          JUPITER_V1_SWAP,
+          {
             quoteResponse,
             userPublicKey,
-            wrapUnwrapSOL: true,
-        };
-
-        const response = await axios.post(`${JUPITER_V6_API}/swap-instructions`, body);
+            slippage: buySlippage,
+            dynamicComputeUnitLimit: true,
+            prioritizationFeeLamports: {
+              priorityLevelWithMaxLamports: {
+                maxLamports: 1000000,
+                priorityLevel: "veryHigh"
+              }
+            }
+          },
+          {
+            headers: {
+              'Content-Type': 'application/json'
+              // 'x-api-key': 'YOUR_API_KEY' // Uncomment and add your API key if needed
+            }
+          }
+        );
         return response.data;
-    } catch (error) {
-        console.error("❌ Error fetching swap instructions:", error.response ? error.response.data : error.message);
-        return null;
-    }
+      } catch (error) {
+        console.error("Error in getSwap:", error);
+        throw error;
+      }
 }
 
 /**
@@ -143,22 +159,35 @@ async function getBuySwapInstructions(quoteResponse, userPublicKey) {
  * @param {string} userPublicKey - User's public key.
  * @param {boolean} feeIsTrue - Whether to include fee.
  */
-async function getSellSwapInstructions(quoteResponse, userPublicKey) {
+async function getSellSwapInstructions(quoteResponse, userPublicKey, sellSlippage) {
     try {
-        const body = {
+        const response = await axios.post(
+          JUPITER_V1_SWAP,
+          {
             quoteResponse,
             userPublicKey,
-            wrapUnwrapSOL: true, // Ensures SOL is wrapped/unwrapped properly
+            slippage: sellSlippage,
             feeAccount,
-
-        };
-
-        const response = await axios.post(`${JUPITER_V6_API}/swap-instructions`, body);
+            dynamicComputeUnitLimit: true,
+            prioritizationFeeLamports: {
+              priorityLevelWithMaxLamports: {
+                maxLamports: 1000000,
+                priorityLevel: "veryHigh"
+              }
+            }
+          },
+          {
+            headers: {
+              'Content-Type': 'application/json'
+              // 'x-api-key': 'YOUR_API_KEY' // Uncomment and add your API key if needed
+            }
+          }
+        );
         return response.data;
-    } catch (error) {
-        console.error("❌ Error fetching swap instructions:", error.response ? error.response.data : error.message);
-        return null;
-    }
+      } catch (error) {
+        console.error("Error in getSwap:", error);
+        throw error;
+      }
 }
 
 /**

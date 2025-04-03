@@ -1,3 +1,16 @@
+const { 
+  Connection,
+  Keypair, 
+  LAMPORTS_PER_SOL,
+  VersionedTransaction,
+  PublicKey,
+  TransactionMessage,
+  ComputeBudgetProgram
+  } = require('@solana/web3.js');
+  const fs = require('fs');
+
+const path = require('path');
+
 function formatNumber(num) {
     num = Number(num);
     if (isNaN(num)) {
@@ -54,129 +67,210 @@ function calculateSolana(solanaPrice, tokenPrice, tokenAmount) {
  * @returns {Promise<number>} - The token balance in raw units after the transaction.
  */
 async function getTokenBalanceFromTransaction(connection, walletAddress, tokenMint, txid) {
-    const wallet = typeof walletAddress === "string" ? new PublicKey(walletAddress) : walletAddress;
-    const mint = typeof tokenMint === "string" ? new PublicKey(tokenMint) : tokenMint;
-  
+  const wallet = typeof walletAddress === "string" ? new PublicKey(walletAddress) : walletAddress;
+  const mint = typeof tokenMint === "string" ? new PublicKey(tokenMint) : tokenMint;
+
+  try {
+    const parsedTx = await connection.getParsedTransaction(txid, {
+      commitment: "confirmed",
+      maxSupportedTransactionVersion: 0
+    });
+
+    const postBalance = parsedTx?.meta?.postTokenBalances?.find(
+      (entry) =>
+        entry.owner === wallet.toBase58() &&
+        entry.mint === mint.toBase58()
+    );
+
+    if (postBalance && postBalance.uiTokenAmount) {
+      const amount = Number(postBalance.uiTokenAmount.amount); // raw amount
+      return amount;
+    }
+
+    return 0;
+  } catch (err) {
+    console.error("❌ Failed to fetch or parse transaction:", err);
+    return 0;
+  }
+}
+
+
+// Optional: dummy fallback symbol resolver (you could replace this with a real token list)
+async function resolveSymbol(mint) {
+  const knownTokens = {
+    'So11111111111111111111111111111111111111112': 'SOL',
+    // add more known mints here
+  };
+
+  return knownTokens[mint] || 'UNKNOWN';
+}
+
+
+async function getUserTokens(chatId) {
+  const filePath = path.join(__dirname, '..', 'data', `${chatId}.json`);
+
+  if (!fs.existsSync(filePath)) {
+    return [];
+  }
+
+  try {
+    const fileContent = fs.readFileSync(filePath, 'utf8');
+    const tokens = JSON.parse(fileContent);
+
+    return tokens;
+  } catch (err) {
+    console.error(`❌ Failed to read tokens for user ${chatId}:`, err);
+    return [];
+  }
+}
+
+
+async function storeTokenData(outputMint, filePath, tokenBalance, debugFilePath, SOLAMOUNT, symbol) {
+  let tokens = [];
+
+  if (!fs.existsSync('./data')) {
+    fs.mkdirSync('./data');
+  }
+
+  // Read the existing token file
+  if (fs.existsSync(filePath)) {
     try {
-      const parsedTx = await connection.getParsedTransaction(txid, {
-        commitment: "confirmed",
-        maxSupportedTransactionVersion: 0
-      });
-      
-  
-      const postBalance = parsedTx?.meta?.postTokenBalances?.find(
-        (entry) =>
-          entry.owner === wallet.toBase58() &&
-          entry.mint === mint.toBase58()
-      );
-  
-      if (postBalance && postBalance.uiTokenAmount) {
-        return Number(postBalance.uiTokenAmount.amount); // raw amount
-      }
-  
-      return 0;
-    } catch (err) {
-      console.error("❌ Failed to fetch or parse transaction:", err);
-      return 0;
+      const fileData = fs.readFileSync(filePath, 'utf8');
+      tokens = fileData ? JSON.parse(fileData) : [];
+    } catch (error) {
+      console.error("Error parsing JSON file. Creating a new one.", error);
+      tokens = [];
     }
   }
 
-async function storeTokenData(outputMint, filePath, tokenBalance, debugFilePath) {
-    let tokens = [];
-    if (!fs.existsSync('./data')) {
-        fs.mkdirSync('./data');
+  const decimals = 6;
+  const humanReadableBalance = Number(tokenBalance) / Math.pow(10, decimals);
+
+  if (tokenBalance === 0) {
+    throw new Error("Token balance is zero, cannot calculate token price.");
+  }
+
+  const feeFromSolscan = 0;
+  const tokenPrice = (parseFloat(SOLAMOUNT) + feeFromSolscan) / humanReadableBalance;
+
+  // Check if token already exists
+  const tokenIndex = tokens.findIndex(token => token.tokenMint === outputMint);
+
+  if (tokenIndex >= 0) {
+    // Update existing token
+    tokens[tokenIndex] = {
+      ...tokens[tokenIndex], // Keep createdAt and other fields
+      tokenPrice,
+      tokenBalance,
+      symbol,
+      updatedAt: new Date().toISOString()
+    };
+    console.log(`✅ Token data for ${outputMint} updated successfully.`);
+  } else {
+    // Add new token
+    tokens.push({
+      tokenMint: outputMint,
+      tokenPrice,
+      tokenBalance,
+      symbol,
+      createdAt: new Date().toISOString()
+    });
+    console.log("✅ Token data stored successfully.");
+  }
+
+  // Save to main token file
+  try {
+    fs.writeFileSync(filePath, JSON.stringify(tokens, null, 2), 'utf8');
+  } catch (error) {
+    console.error("Error writing tokens file:", error);
+  }
+
+  // ---------- Debug File Update ----------
+  let debugTokens = [];
+
+  if (fs.existsSync(debugFilePath)) {
+    try {
+      const debugData = fs.readFileSync(debugFilePath, 'utf8');
+      debugTokens = debugData ? JSON.parse(debugData) : [];
+    } catch (error) {
+      console.error("Error parsing debug JSON file. Creating a new one.", error);
+      debugTokens = [];
     }
-      
-    // Attempt to read the existing tokens file.
+  }
+
+  const timestamp = new Date().toLocaleString('de-AT');
+
+  const debugRecord = {
+    tokenMint: outputMint,
+    tokenPrice,
+    tokenBalance,
+    symbol,
+    timestamp
+  };
+
+  debugTokens.push(debugRecord);
+
+  try {
+    fs.writeFileSync(debugFilePath, JSON.stringify(debugTokens, null, 2), 'utf8');
+    console.log("✅ Debug token data stored successfully in debug file.");
+  } catch (error) {
+    console.error("Error writing debug tokens file:", error);
+  }
+}
+
+
+  async function updateTokenData(outputMint, filePath, newTokenBalance) {
+    let tokens = [];
+  
+    // Ensure ./data exists
+    if (!fs.existsSync('./data')) {
+      fs.mkdirSync('./data');
+    }
+  
+    // Load existing tokens
     if (fs.existsSync(filePath)) {
       try {
         const fileData = fs.readFileSync(filePath, 'utf8');
         tokens = fileData ? JSON.parse(fileData) : [];
       } catch (error) {
-        console.error("Error parsing JSON file. Creating a new one.", error);
-        tokens = [];
+        console.error("❌ Error reading/parsing token file:", error);
+        return;
       }
     }
-    const decimals = 6
-    const humanReadableBalance = Number(tokenBalance) / Math.pow(10, decimals);
-    if (tokenBalance === 0) {
-      throw new Error("Token balance is zero, cannot calculate token price.");
-    }
-    // Calculate the token price (assuming SOLAMOUNT is defined and calculateTokenPrice is available).
-    const feeFromSolscan = 0;
-    const tokenPrice = (parseFloat(SOLAMOUNT) + feeFromSolscan) / humanReadableBalance;
   
-    // Check if the token already exists in the tokens array.
     const tokenIndex = tokens.findIndex(token => token.tokenMint === outputMint);
   
-    if (tokenIndex >= 0) {
-      // Token exists: update its data.
-      tokens[tokenIndex] = {
-        tokenMint: outputMint,
-        tokenPrice: tokenPrice,
-        tokenBalance: tokenBalance,
-        updatedAt: new Date().toISOString()  // Record when the token info was updated.
-      };
-      console.log(`✅ Token data for ${outputMint} updated successfully.`);
-    } else {
-      // Token does not exist: add it.
-      tokens.push({
-        tokenMint: outputMint,
-        tokenPrice: tokenPrice,
-        tokenBalance: tokenBalance,
-        createdAt: new Date().toISOString()  // Record creation time.
-      });
-      console.log("✅ Token data stored successfully.");
+    if (tokenIndex === -1) {
+      console.log(`⚠️ Token ${outputMint} not found in file. Nothing to update.`);
+      return;
     }
   
-    // Write the updated tokens array back to the main file.
+    if (newTokenBalance === 0) {
+      // Remove token
+      tokens.splice(tokenIndex, 1);
+      console.log(`🗑️ Token ${outputMint} removed from ${filePath}`);
+    } else {
+      // Update token balance
+      tokens[tokenIndex].tokenBalance = newTokenBalance;
+      tokens[tokenIndex].updatedAt = new Date().toISOString();
+      console.log(`✅ Token ${outputMint} balance updated to ${newTokenBalance}`);
+    }
+  
+    // Write back the updated token list
     try {
       fs.writeFileSync(filePath, JSON.stringify(tokens, null, 2), 'utf8');
     } catch (error) {
-      console.error("Error writing tokens file:", error);
-    }
-  
-    // ---------- Debug File Update ----------
-  
-    let debugTokens = [];
-  
-    // Attempt to read the debug tokens file.
-    if (fs.existsSync(debugFilePath)) {
-      try {
-        const debugData = fs.readFileSync(debugFilePath, 'utf8');
-        debugTokens = debugData ? JSON.parse(debugData) : [];
-      } catch (error) {
-        console.error("Error parsing debug JSON file. Creating a new one.", error);
-        debugTokens = [];
-      }
-    }
-  
-    // Create a human-readable timestamp using the Austrian locale.
-    const timestamp = new Date().toLocaleString('de-AT');
-  
-    // Prepare the debug record.
-    const debugRecord = {
-      tokenMint: outputMint,
-      tokenPrice: tokenPrice,
-      tokenBalance: tokenBalance,
-      timestamp: timestamp,
-    };
-  
-    // Append the debug record and write it back to the debug file.
-    debugTokens.push(debugRecord);
-    try {
-      fs.writeFileSync(debugFilePath, JSON.stringify(debugTokens, null, 2), 'utf8');
-      console.log("✅ Debug token data stored successfully in debug file.");
-    } catch (error) {
-      console.error("Error writing debug tokens file:", error);
+      console.error("❌ Error writing token file:", error);
     }
   }
-
+  
 module.exports = { 
     formatNumber, 
     calculateMarketCap,
     calculateTokens,
     calculateSolana,
     getTokenBalanceFromTransaction,
-    storeTokenData
+    storeTokenData,
+    updateTokenData,
+    getUserTokens
 };

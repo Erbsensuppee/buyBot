@@ -4,7 +4,7 @@ const {
   VersionedTransaction,
   ComputeBudgetProgram,
   AddressLookupTableAccount,
-  Connection
+  Connection,
 } = require("@solana/web3.js");
 
 async function getAddressLookupTableAccounts(keys, connection) {
