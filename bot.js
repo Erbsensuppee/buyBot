@@ -28,6 +28,11 @@ const {
     storeTokenData
  } = require("./src/helperFunctions.js");
 const { performSwapBuy, performSwapSell } = require('./src/swap.js');
+const { showPositionMenu } = require("./src/menue/positons.js")
+const { refreshAllBalances, saveWallets, loadWallets, refreshAllBalancesGlobal, decreaseSolBalanceForWallet, increaseSolBalanceForWallet } = require("./src/wallets/allWallets");
+const { showWalletsMenu } = require("./src/wallets/showWalletsMenu");
+
+
 
 // const allowedUsers = process.env.ALLOWED_USERS ? process.env.ALLOWED_USERS.split(',').map(Number) : [];
 const bot = new TelegramBot(process.env.TELEGRAM_BOT_TOKEN, { polling: true });
@@ -41,41 +46,10 @@ const userContext = {};  // Store the last action of each user
 
 // Load existing wallets or create an empty object
 const WALLET_FILE = "wallets.json";
-let wallets = [];
-if (fs.existsSync(WALLET_FILE)) {
-    wallets = JSON.parse(fs.readFileSync(WALLET_FILE, "utf8"));
-}
 
-// Function to save wallets to file
-function saveWallets() {
-    fs.writeFileSync(WALLET_FILE, JSON.stringify(wallets, null, 2));
-}
+let wallets = loadWallets();
 
 const feeAccount = "5KMcyGvqwd95wgFiK6Q9rSA5w9sBrDcUE1bP6cNt9Qqj";
-
-// Function to get or create a wallet for a user
-function getUserWallet(chatId) {
-    if (!wallets[chatId]) {
-        console.log(`Creating a new wallet for user: ${chatId}`);
-
-        const newWallet = Keypair.generate();
-        wallets[chatId] = [{
-            label: "W1",
-            privateKeyBase58: bs58.encode(newWallet.secretKey),
-            publicKey: newWallet.publicKey
-        }];
-
-        saveWallets();
-    }
-
-    // Return the first wallet (default active wallet)
-    return wallets[chatId].privateKeyBase58;
-}
-
-// Function to get the active wallet Keypair
-function getWalletKeypair(wallet) {
-    return Keypair.fromSecretKey(bs58.decode(wallet.privateKeyBase58));
-}
 
 // Helper function to validate Solana token addresses
 function isValidSolanaAddress(address) {
@@ -634,9 +608,9 @@ bot.on("callback_query", async (query) => {
                 connection, 
                 transaction, 
                 [senderKeypair],  // The array of signers
-                { commitment: "processed" }  // Commitment option in an object
+                { commitment: "confirmed" }  // Commitment option in an object
             );
-            
+            decreaseSolBalanceForWallet(chatId, activeIndex, solAmount);
     
             bot.sendMessage(chatId, `✅ *Withdrawal Successful!*\n🔗 [View on Solscan](https://solscan.io/tx/${txSignature})`, { parse_mode: "Markdown" });
     
@@ -837,6 +811,7 @@ bot.on("callback_query", async (query) => {
 
     } else if (data === "positions") {
         bot.sendMessage(chatId, "🔎 Fetching your open positions...");
+        showPositionMenu(bot, chatId, wallets[chatId]);
     } else if (data === "limit_orders") {
         bot.sendMessage(chatId, "📈 Viewing Limit Orders...");
     } else if (data === "dca_orders") {
@@ -891,17 +866,20 @@ bot.on("callback_query", async (query) => {
         }
     }else if (data.startsWith("set_active_wallet_")) {
         const walletIndex = parseInt(data.split("_")[3]); // Extract wallet index
+    
         if (!wallets[chatId] || !wallets[chatId].wallets[walletIndex]) {
             return bot.sendMessage(chatId, "❌ Invalid wallet selection.");
         }
     
         // Set the active wallet index
         wallets[chatId].activeWallet = walletIndex;
-        saveWallets();
     
-        // Refresh the wallets menu to show the new active wallet
+        // Save updated wallets object
+        saveWallets(wallets); // ✅ FIXED
+    
+        // Give feedback & refresh menu
         bot.answerCallbackQuery(query.id, { text: `✅ Wallet W${walletIndex + 1} is now active!` });
-        bot.emit("callback_query", { ...query, data: "wallets" }); // Reload wallets menu
+        bot.emit("callback_query", { ...query, data: "wallets" }); // Re-render wallets menu
     } else if (data === "settings") {
         const settingsMenu = {
             reply_markup: {
@@ -928,84 +906,47 @@ bot.on("callback_query", async (query) => {
             ...settingsMenu
         });
     } else if (data === "wallets") {
-        try {
-            let solanaText = "*Solana Wallets*\n";
-            let walletsMenu;
-            let solanaWalletButtons = [];
+        await showWalletsMenu(bot, chatId, messageId, connection)
+    } else if (data === "refresh_balances") {
+        await bot.editMessageText("🔄 Refreshing all wallet balances...", {
+            chat_id: chatId,
+            message_id: messageId
+        });
     
-            const activeIndex = wallets[chatId].activeWallet || 0;  // Default to first wallet
+        await refreshAllBalances(chatId, connection);
+        //Just for debugging
+        await refreshAllBalancesGlobal(connection);
+        await showWalletsMenu(bot, chatId, messageId, connection);
+    } else if (data === "create_wallet") {
+        let max_Wallets = 12;
     
-            if (!wallets[chatId] || wallets[chatId].wallets.length === 0) {
-                solanaText += "🚨 *No wallet found.*\nCreate one using the button below.\n\n";
-                walletsMenu = {
-                    reply_markup: {
-                        inline_keyboard: [
-                            [{ text: "➕ Create Solana Wallet", callback_data: "create_wallet" }, { text: "📥 Import Solana Wallet", callback_data: "import_wallet" }],
-                            [{ text: "⬅️ Back to Main", callback_data: "main_menu" }]
-                        ]
-                    }
-                };
-            } else {
-                for (let i = 0; i < wallets[chatId].wallets.length; i++) {
-                    const userWallet = wallets[chatId].wallets[i];
-                    const publicKey = userWallet.publicKey;
-                    const balance = await checkWallet(publicKey, connection);
-    
-                    const checkmark = (i === activeIndex) ? "✅" : "";  // Show ✅ for active wallet
-                    solanaText += `\`${publicKey}\`\n*Label:* W${i + 1} ${checkmark}\n*Balance:* ${balance.toFixed(4)} SOL\n\n`;
-    
-                    // Add each wallet button to the array
-                    solanaWalletButtons.push({ text: `W${i + 1} ${checkmark}`, callback_data: `set_active_wallet_${i}` });
-                }
-    
-                // Group buttons into rows of 3
-                let formattedButtons = [];
-                for (let i = 0; i < solanaWalletButtons.length; i += 3) {
-                    formattedButtons.push(solanaWalletButtons.slice(i, i + 3));
-                }
-    
-                // Add "Create Wallet" and "Back" buttons at the bottom
-                formattedButtons.push([{ text: "➕ Create Solana Wallet", callback_data: "create_wallet" }]);
-                formattedButtons.push([{ text: "Export Private Key", callback_data: "export_privateKey" }]);
-                formattedButtons.push([{ text: "⬅️ Back to Main", callback_data: "main_menu" }]);
-    
-                walletsMenu = {
-                    reply_markup: {
-                        inline_keyboard: formattedButtons
-                    }
-                };
-            }
-    
-            bot.editMessageText(`${solanaText}💡 To rename or export your Solana wallets, click the button with the wallet's name.`, {
-                chat_id: chatId,
-                message_id: messageId,
-                parse_mode: "Markdown",
-                ...walletsMenu
-            });
-    
-        } catch (error) {
-            bot.sendMessage(chatId, "❌ Error fetching wallets.");
-            console.log("❌ Error fetching wallets: " + error.message);
+        if (!wallets[chatId]) {
+            wallets[chatId] = { wallets: [], activeWallet: 0 };
         }
-    } else if(data === "create_wallet"){
-        let max_Wallets = 11
+    
         if (wallets[chatId].wallets.length >= max_Wallets) {
             return bot.sendMessage(chatId, `🚨 You can only create up to ${max_Wallets} wallets.`);
         }
-
+    
         const newWallet = Keypair.generate();
         const privateKeyBase58 = bs58.encode(newWallet.secretKey);
         const publicKey = newWallet.publicKey;
-
-        // Assign a label based on the number of existing wallets
-        const walletCount = wallets[chatId].wallets.length + 1;
-        const walletLabel = `W${walletCount}`;
-
-        // Store the new wallet
-        wallets[chatId].wallets.push({ label: walletLabel, privateKeyBase58, publicKey });
-        saveWallets();
-
-        bot.sendMessage(chatId, `✅ *New Wallet Created!*\n\n🗝 *Public Key:* \`${publicKey}\`\n📛 *Label:* ${walletLabel}\n🔒 *Private Key:* [Stored Securely]`, { parse_mode: "Markdown" });
+        const walletLabel = `W${wallets[chatId].wallets.length + 1}`;
+    
+        wallets[chatId].wallets.push({
+            label: walletLabel,
+            privateKeyBase58,
+            publicKey,
+            solBalanceLamports: 0
+        });
+    
+        saveWallets(wallets); // ✅ FIXED
+    
+        bot.sendMessage(
+            chatId,
+            `✅ *New Wallet Created!*\n\n🗝 *Public Key:* \`${publicKey}\`\n📛 *Label:* ${walletLabel}\n🔒 *Private Key:* [Stored Securely]`,
+            { parse_mode: "Markdown" }
+        );
     } else if (data === "help") {
         bot.sendMessage(chatId, "❓ How can I help you?");
     } else if (data === "export_privateKey") {
@@ -1053,11 +994,12 @@ bot.on("callback_query", async (query) => {
                     wallets: [{
                         label: "W1",
                         privateKeyBase58: bs58.encode(newWallet.secretKey),
-                        publicKey: newWallet.publicKey
+                        publicKey: newWallet.publicKey,
+                        solBalanceLamports: 0
                     }]
                 };
 
-                saveWallets();
+                saveWallets(wallets); // ✅ pass the global object
             }
 
             // Get the active wallet
@@ -1066,13 +1008,13 @@ bot.on("callback_query", async (query) => {
             const publicKey = userWallet.publicKey;
     
             // Fetch balance
-            const balance = await checkWallet(publicKey, connection);
+            const balance = userWallet.solBalance || 0;
     
             const options = {
                 reply_markup: {
                     inline_keyboard: [
                         [{ text: "🟢 Buy", callback_data: "buy" }, { text: "🔴 Sell", callback_data: "sell" }],
-                        //[{ text: "📊 Positions", callback_data: "positions" }, { text: "📈 Limit Orders", callback_data: "limit_orders" }, { text: "📉 DCA Orders", callback_data: "dca_orders" }],
+                        [{ text: "📊 Positions", callback_data: "positions" }],// { text: "📈 Limit Orders", callback_data: "limit_orders" }, { text: "📉 DCA Orders", callback_data: "dca_orders" }],
                         //[{ text: "📎 Copy Trade", callback_data: "copy_trade" }, { text: "🎯 Sniper", callback_data: "sniper" }],
                         //[{ text: "⚔️ Trenches", callback_data: "trenches" }, { text: "👥 Referrals", callback_data: "referrals" }, { text: "⭐ Watchlist", callback_data: "watchlist" }],
                         [{ text: "👛 Wallets", callback_data: "wallets" }, { text: "💸 Withdraw", callback_data: "withdraw" }]
@@ -1116,7 +1058,7 @@ bot.on("callback_query", async (query) => {
     } catch (error) {
         bot.sendMessage(chatId, "❌ Error /start.");
     }
-}
+    }
 
     bot.answerCallbackQuery(query.id);
 });
@@ -1141,11 +1083,12 @@ bot.onText(/\/start/, async (msg) => {
                 wallets: [{
                     label: "W1",
                     privateKeyBase58: bs58.encode(newWallet.secretKey),
-                    publicKey: newWallet.publicKey
+                    publicKey: newWallet.publicKey,
+                    solBalanceLamports: 0
                 }]
             };
 
-            saveWallets();
+            saveWallets(wallets);
         }
 
         // Get the active wallet
@@ -1154,13 +1097,13 @@ bot.onText(/\/start/, async (msg) => {
         const publicKey = userWallet.publicKey;
 
         // Fetch balance
-        const balance = await checkWallet(publicKey, connection);
+        const balance = userWallet.solBalance || 0; // ✅ use cached balance
 
         const options = {
             reply_markup: {
                 inline_keyboard: [
                     [{ text: "🟢 Buy", callback_data: "buy" }, { text: "🔴 Sell", callback_data: "sell" }],
-                    //[{ text: "📊 Positions", callback_data: "positions" }, { text: "📈 Limit Orders", callback_data: "limit_orders" }, { text: "📉 DCA Orders", callback_data: "dca_orders" }],
+                    [{ text: "📊 Positions", callback_data: "positions" }],// { text: "📈 Limit Orders", callback_data: "limit_orders" }, { text: "📉 DCA Orders", callback_data: "dca_orders" }],
                     //[{ text: "📎 Copy Trade", callback_data: "copy_trade" }, { text: "🎯 Sniper", callback_data: "sniper" }],
                     //[{ text: "⚔️ Trenches", callback_data: "trenches" }, { text: "👥 Referrals", callback_data: "referrals" }, { text: "⭐ Watchlist", callback_data: "watchlist" }],
                     [{ text: "👛 Wallets", callback_data: "wallets" }, { text: "💸 Withdraw", callback_data: "withdraw" }],
