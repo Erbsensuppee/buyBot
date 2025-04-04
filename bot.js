@@ -31,8 +31,10 @@ const {
  } = require("./src/helperFunctions.js");
 const { performSwapBuy, performSwapSell } = require('./src/swap.js');
 const { showPositionMenu } = require("./src/menue/positons.js")
+const { showMainMenu } = require("./src/menue/mainMenu.js")
 const { refreshAllBalances, saveWallets, loadWallets, refreshAllBalancesGlobal, decreaseSolBalanceForWallet, increaseSolBalanceForWallet } = require("./src/wallets/allWallets");
 const { showWalletsMenu } = require("./src/wallets/showWalletsMenu");
+const { showWithdrawMenu } = require('./src/menue/withdrawMenu.js');
 
 
 
@@ -504,14 +506,14 @@ bot.on("callback_query", async (query) => {
         
                 // Store the custom withdrawal amount
                 if (!userWithdrawData[chatId]) userWithdrawData[chatId] = {};
-                userWithdrawData[chatId].solAmount = solAmount * LAMPORTS_PER_SOL;
+                userWithdrawData[chatId].customAmountSol = solAmount;
         
                 // ✅ Delete the original prompt message
                 bot.deleteMessage(chatId, promptMessageId).catch((err) => {
                     console.error("❌ Error deleting message:", err.message);
                 });
                 // Refresh the withdraw menu with updated values
-                refreshWithdrawMenu(chatId, messageId);
+                showWithdrawMenu(bot, chatId, null, userWithdrawData[chatId]);
             });
 
         });
@@ -541,7 +543,7 @@ bot.on("callback_query", async (query) => {
 
         // Store the selected percentage and amount
         userWithdrawData[chatId].selectedPercentage = percentage;
-        userWithdrawData[chatId].solAmount = lamportsToSend;
+        userWithdrawData[chatId].lamportsToSend = lamportsToSend;
     
         // Refresh the withdraw menu with updated values
         refreshWithdrawMenu(chatId, messageId);
@@ -565,25 +567,25 @@ bot.on("callback_query", async (query) => {
         
                 // Store the withdrawal address
                 if (!userWithdrawData[chatId]) userWithdrawData[chatId] = {};
-                userWithdrawData[chatId].withdrawalAddress = address;
+                userWithdrawData[chatId].destinationAddress = address;
         
                 // ✅ Delete the original prompt message
                 bot.deleteMessage(chatId, promptMessageId).catch((err) => {
                     console.error("❌ Error deleting message:", err.message);
                 });
                 // Refresh the withdraw menu with updated values
-                refreshWithdrawMenu(chatId, messageId);
+                showWithdrawMenu(bot, chatId, null, userWithdrawData[chatId]);
             });
         });
-    } else if (data === "confirm_withdraw") {
+    } else if (data === "confirm_withdrawal") {
         if (!userWithdrawData[chatId]) {
             return bot.sendMessage(chatId, "❌ No withdrawal data found. Please try again.");
         }
     
-        const solAmount = userWithdrawData[chatId].solAmount;
-        const withdrawalAddress = userWithdrawData[chatId].withdrawalAddress;
+        const lamportsToSend = userWithdrawData[chatId].customAmountSol * LAMPORTS_PER_SOL;
+        const withdrawalAddress = userWithdrawData[chatId].destinationAddress;
     
-        if (!solAmount || solAmount <= 0) {
+        if (!lamportsToSend || lamportsToSend <= 0) {
             return bot.sendMessage(chatId, "❌ Invalid withdrawal amount.");
         }
     
@@ -591,7 +593,7 @@ bot.on("callback_query", async (query) => {
             return bot.sendMessage(chatId, "❌ Invalid withdrawal address.");
         }
     
-        bot.sendMessage(chatId, `🔄 Processing withdrawal of *${solAmount/LAMPORTS_PER_SOL} SOL* to:\n\`${withdrawalAddress}\``, { parse_mode: "Markdown" });
+        bot.sendMessage(chatId, `🔄 Processing withdrawal of *${lamportsToSend/LAMPORTS_PER_SOL} SOL* to:\n\`${withdrawalAddress}\``, { parse_mode: "Markdown" });
     
         try {
             const activeIndex = wallets[chatId].activeWallet || 0;
@@ -602,7 +604,7 @@ bot.on("callback_query", async (query) => {
                 SystemProgram.transfer({
                     fromPubkey: senderKeypair.publicKey,
                     toPubkey: new PublicKey(withdrawalAddress),
-                    lamports: solAmount
+                    lamports: lamportsToSend
                 })
             );
     
@@ -612,7 +614,7 @@ bot.on("callback_query", async (query) => {
                 [senderKeypair],  // The array of signers
                 { commitment: "confirmed" }  // Commitment option in an object
             );
-            decreaseSolBalanceForWallet(chatId, activeIndex, solAmount);
+            decreaseSolBalanceForWallet(chatId, activeIndex, lamportsToSend);
     
             bot.sendMessage(chatId, `✅ *Withdrawal Successful!*\n🔗 [View on Solscan](https://solscan.io/tx/${txSignature})`, { parse_mode: "Markdown" });
     
@@ -679,13 +681,6 @@ bot.on("callback_query", async (query) => {
         let buySignature;
         try {
             buySignature = await performSwapBuy(inputMint, solAmount, outputMint, connection, adjustedSlippage, privatKey, chatId)
-            bot.sendMessage(chatId, `✅ Swap Successful!\n🔗 [View on Solscan](https://solscan.io/tx/${buySignature}/)`);
-
-        } catch (error) {
-            console.error("❌ Swap Error:", error);
-            bot.sendMessage(chatId, "❌ Swap failed. Please try again.");
-        }
-        try {
             const filePath = `./data/${chatId}.json`;
             const debugFilePath = `./data/${chatId}_debug.json`;
         
@@ -697,7 +692,7 @@ bot.on("callback_query", async (query) => {
             );
         
             // ✅ Subtract actual SOL spent
-            decreaseSolBalanceForWallet(chatId, activeIndex, solSpentLamports);
+            await decreaseSolBalanceForWallet(chatId, activeIndex, solSpentLamports);
         
             // ✅ Store token with accurate data
             await storeTokenData(
@@ -708,8 +703,11 @@ bot.on("callback_query", async (query) => {
                 solSpentLamports,
                 userBuyData[chatId].tokenSymbol
             );
+            bot.sendMessage(chatId, `✅ Swap Successful!\n🔗 [View on Solscan](https://solscan.io/tx/${buySignature}/)`);
+
         } catch (error) {
-            console.warn("⚠️ Failed to finalize buy transaction:", error);
+            console.error("❌ Swap Error:", error);
+            bot.sendMessage(chatId, "❌ Swap failed. Please try again.");
         }
         userBuyData[chatId].tokenSymbol
         let tmpBuySolAmount = userBuyData[chatId]?.solAmount; // Default solAmount
@@ -802,20 +800,15 @@ bot.on("callback_query", async (query) => {
         let sellSignature;
         try {
             sellSignature = await performSwapSell(inputMint, tokenAmount, outputMint, connection, adjustedSlippage, userWallet.privateKeyBase58, chatId);
+            const filePath = `./data/${chatId}.json`; // main token data
+            const { solReceivedLamports, newTokenBalance } = await getSellTransactionDetails(connection, keypair.publicKey, inputMint, sellSignature);
+            await increaseSolBalanceForWallet(chatId, activeIndex, solReceivedLamports);
+            const removeToken = await updateTokenData(inputMint, filePath, newTokenBalance);
             bot.sendMessage(chatId, `✅ Swap Successful!\n🔗 [View on Solscan](https://solscan.io/tx/${sellSignature}/)`);
                 
         } catch (error) {
             console.error("❌ Swap Error:", error);
             bot.sendMessage(chatId, "❌ Swap failed. Please try again.");
-        }
-        try {
-            //await storeAmmTokenData(outputMint, filePath, priceInSol);
-            const filePath = `./data/${chatId}.json`; // main token data
-            const { solReceivedLamports, newTokenBalance } = await getSellTransactionDetails(connection, keypair.publicKey, inputMint, sellSignature);
-            await increaseSolBalanceForWallet(chatId, activeIndex, solReceivedLamports);
-            const removeToken = await updateTokenData(inputMint, filePath, newTokenBalance);
-        } catch (error) {
-            console.warn("⚠️ Failed to store token data:", error);
         }
         
         delete userSellData[chatId];
@@ -823,7 +816,7 @@ bot.on("callback_query", async (query) => {
 
     } else if (data === "positions") {
         bot.sendMessage(chatId, "🔎 Fetching your open positions...");
-        showPositionMenu(bot, chatId, wallets[chatId]);
+        await showPositionMenu(bot, chatId, wallets[chatId]);
     } else if (data === "limit_orders") {
         bot.sendMessage(chatId, "📈 Viewing Limit Orders...");
     } else if (data === "dca_orders") {
@@ -839,44 +832,7 @@ bot.on("callback_query", async (query) => {
     } else if (data === "watchlist") {
         bot.sendMessage(chatId, "⭐ Viewing your watchlist...");
     } else if (data === "withdraw") {
-        try {
-            const activeIndex = wallets[chatId].activeWallet || 0;
-            const userWallet = wallets[chatId].wallets[activeIndex];
-            const publicKey = userWallet.publicKey;
-            const balanceLamports = userWallet.solBalanceLamports || 0;
-            const balanceSol = balanceLamports / LAMPORTS_PER_SOL;
-    
-            let withdrawText = `💸 *Withdraw $SOL* — (Solana)  
-    📄 *Balance:* ${balanceSol.toFixed(4)} SOL`;
-    
-            const selectedPercentage = userWithdrawData[chatId]?.selectedPercentage || "Not Set"; // Default 100%
-    
-            // Construct withdraw menu
-            const withdrawMenu = {
-                reply_markup: {
-                    inline_keyboard: [
-                        [{ text: "⬅️ Back", callback_data: "main_menu" }, { text: "🔄 Refresh", callback_data: "withdraw" }],
-                        [
-                            { text: `${selectedPercentage === 50 ? "✅" : ""} 50 %`, callback_data: "withdraw_50" },
-                            { text: `${selectedPercentage === 100 ? "✅" : ""} 100 %`, callback_data: "withdraw_100" }
-                        ],
-                        [{ text: "✏️ X SOL", callback_data: "custom_withdraw_amount" }],
-                        [{ text: "🏦 Set Withdrawal Address", callback_data: "set_withdrawal_address" }]
-                    ]
-                }
-            };
-    
-            bot.editMessageText(withdrawText, {
-                chat_id: chatId,
-                message_id: messageId,
-                parse_mode: "Markdown",
-                ...withdrawMenu
-            });
-    
-        } catch (error) {
-            bot.sendMessage(chatId, "❌ Error fetching balance.");
-            console.error("❌ Withdraw Menu Error:", error.message);
-        }
+        await showWithdrawMenu(bot, chatId, messageId, userWithdrawData[chatId]);
     }else if (data.startsWith("set_active_wallet_")) {
         const walletIndex = parseInt(data.split("_")[3]); // Extract wallet index
     
@@ -991,179 +947,16 @@ bot.on("callback_query", async (query) => {
     } else if (data === "cancel" || data === "delete_private_key_message") {
         bot.deleteMessage(chatId, messageId); // Delete the message instead of sending a cancel response
     } else if (data === "main_menu") {
-
-        // if (!allowedUsers.includes(chatId)) {
-        //     return bot.sendMessage(chatId, "🚫 Access denied. You are not authorized to use this bot.");
-        // }
-    
-        try {
-            // Ensure wallets exist for the user
-            if (!wallets[chatId] ||  wallets[chatId].wallets.length === 0) {
-                console.log(`Creating a new wallet for user: ${chatId}`);
-
-                const newWallet = Keypair.generate();
-                wallets[chatId] = {
-                    activeWallet: 0,  // Default first wallet as active
-                    wallets: [{
-                        label: "W1",
-                        privateKeyBase58: bs58.encode(newWallet.secretKey),
-                        publicKey: newWallet.publicKey,
-                        solBalanceLamports: 0
-                    }]
-                };
-
-                saveWallets(wallets); // ✅ pass the global object
-            }
-
-            // Get the active wallet
-            const activeIndex = wallets[chatId].activeWallet || 0;
-            const userWallet = wallets[chatId].wallets[activeIndex];
-            const publicKey = userWallet.publicKey;
-    
-            // Fetch balance
-            const balanceLamports = userWallet.solBalanceLamports || 0;
-            const balanceSol = balanceLamports / LAMPORTS_PER_SOL;                      
-    
-            const options = {
-                reply_markup: {
-                    inline_keyboard: [
-                        [{ text: "🟢 Buy", callback_data: "buy" }, { text: "🔴 Sell", callback_data: "sell" }],
-                        [{ text: "📊 Positions", callback_data: "positions" }],// { text: "📈 Limit Orders", callback_data: "limit_orders" }, { text: "📉 DCA Orders", callback_data: "dca_orders" }],
-                        //[{ text: "📎 Copy Trade", callback_data: "copy_trade" }, { text: "🎯 Sniper", callback_data: "sniper" }],
-                        //[{ text: "⚔️ Trenches", callback_data: "trenches" }, { text: "👥 Referrals", callback_data: "referrals" }, { text: "⭐ Watchlist", callback_data: "watchlist" }],
-                        [{ text: "👛 Wallets", callback_data: "wallets" }, { text: "💸 Withdraw", callback_data: "withdraw" }]
-                        //[{ text: "💸 Withdraw", callback_data: "withdraw" }], { text: "👛 Wallets", callback_data: "wallets" }],
-                        //[{ text: "❓ Help", callback_data: "help" }, { text: "🔄 Refresh", callback_data: "refresh" }]
-                    ]
-                }
-            };
-    
-            let message = `🚀 *Welcome to MyBuySolBot!*  \n\n`;
-
-            message += `💰 *Solana Wallet Overview*\n`;
-            message += `📜 *Public Key:*  \n\`${publicKey}\` *(Tap to copy)*  \n`;
-            message += `📈 *Balance:* \`${balanceSol.toFixed(4)} SOL\`  \n\n`;
-            
-            message += `✨ *Features:*  \n`;
-            message += `    ✅ *Buy Tokens (0% Fees!)*  \n`;
-            message += `    ✅ *Sell Tokens (Only 0.2% Fee!)*  \n`;
-            message += `    ✅ *Create up to 10 Wallets*  \n`;
-            message += `    ✅ *Withdraw Custom SOL Amount*  \n`;
-            message += `    ✅ *Withdraw SOL by Percentage*  \n`;
-            message += `    ✅ *Withdraw*  \n`;
-            message += `    ✅ *Show Private Key*  \n\n`;
-
-            message += `⚖️ *Trading Fees:*  \n`;
-            message += `    ✅ *0% Fee* on Buys  \n`;
-            message += `    💸 *0.2% Fee* on Sells  \n\n`;
-            
-            message += `🛠 *Upcoming Features:*  \n`;
-            message += `    🔹 *Limit Orders*  \n`;
-            message += `    🔹 *Positions Tracking*  \n`;
-            message += `    🔹 *Buy & Sell PnL Calculation*  \n\n`;
-            
-            message += `📢 *Stay Connected!*  \n`;
-            message += `👥 [Join our Telegram](https://t.me/myBuySolBot)  \n`;
-            message += `👥 [Follow us on Twitter](https://x.com/myBuyBot)  \n`;
-            message += `🔔 *More features coming soon!*`;
-            
-            // Send the message
-            bot.sendMessage(chatId, message, { parse_mode: "Markdown", ...options });
-    } catch (error) {
-        bot.sendMessage(chatId, "❌ Error /start.");
-    }
+        await showMainMenu(bot, chatId, connection);
     }
 
-    bot.answerCallbackQuery(query.id);
 });
 
 
 // Trade on Solana with myBuyBot
 bot.onText(/\/start/, async (msg) => {
     const chatId = msg.chat.id;
-
-    // if (!allowedUsers.includes(msg.from.id)) {
-    //     return bot.sendMessage(chatId, "🚫 Access denied. You are not authorized to use this bot.");
-    // }
-
-    try {
-        // Ensure wallets exist for the user
-        if (!wallets[chatId] ||  wallets[chatId].wallets.length === 0) {
-            console.log(`Creating a new wallet for user: ${chatId}`);
-
-            const newWallet = Keypair.generate();
-            wallets[chatId] = {
-                activeWallet: 0,  // Default first wallet as active
-                wallets: [{
-                    label: "W1",
-                    privateKeyBase58: bs58.encode(newWallet.secretKey),
-                    publicKey: newWallet.publicKey,
-                    solBalanceLamports: 0
-                }]
-            };
-
-            saveWallets(wallets);
-        }
-
-        // Get the active wallet
-        const activeIndex = wallets[chatId].activeWallet || 0;
-        const userWallet = wallets[chatId].wallets[activeIndex];
-        const publicKey = userWallet.publicKey;
-
-        // Fetch balance
-        const balanceLamports = userWallet.solBalanceLamports || 0;
-        const balanceSol = balanceLamports / LAMPORTS_PER_SOL;
-
-        const options = {
-            reply_markup: {
-                inline_keyboard: [
-                    [{ text: "🟢 Buy", callback_data: "buy" }, { text: "🔴 Sell", callback_data: "sell" }],
-                    [{ text: "📊 Positions", callback_data: "positions" }],// { text: "📈 Limit Orders", callback_data: "limit_orders" }, { text: "📉 DCA Orders", callback_data: "dca_orders" }],
-                    //[{ text: "📎 Copy Trade", callback_data: "copy_trade" }, { text: "🎯 Sniper", callback_data: "sniper" }],
-                    //[{ text: "⚔️ Trenches", callback_data: "trenches" }, { text: "👥 Referrals", callback_data: "referrals" }, { text: "⭐ Watchlist", callback_data: "watchlist" }],
-                    [{ text: "👛 Wallets", callback_data: "wallets" }, { text: "💸 Withdraw", callback_data: "withdraw" }],
-                    //[{ text: "👛 Wallets", callback_data: "wallets" }]
-                    //[{ text: "❓ Help", callback_data: "help" }, { text: "🔄 Refresh", callback_data: "refresh" }]
-                ]
-            }
-        };
-
-        let message = `🚀 *Welcome to MyBuySolBot!*  \n\n`;
-
-        message += `💰 *Solana Wallet Overview*\n`;
-        message += `📜 *Public Key:*  \n\`${publicKey}\` *(Tap to copy)*  \n`;
-        message += `📈 *Balance:* \`${balanceSol.toFixed(4)} SOL\`  \n\n`;
-        
-        message += `✨ *Features:*  \n`;
-        message += `    ✅ *Buy Tokens (0% Fees!)*  \n`;
-        message += `    ✅ *Sell Tokens (Only 0.2% Fee!)*  \n`;
-        message += `    ✅ *Create up to 10 Wallets*  \n`;
-        message += `    ✅ *Withdraw Custom SOL Amount*  \n`;
-        message += `    ✅ *Withdraw SOL by Percentage*  \n`;
-        message += `    ✅ *Withdraw*  \n`;
-        message += `    ✅ *Show Private Key*  \n\n`;
-
-        message += `⚖️ *Trading Fees:*  \n`;
-        message += `    ✅ *0% Fee* on Buys  \n`;
-        message += `    💸 *0.2% Fee* on Sells  \n\n`;
-        
-        message += `🛠 *Upcoming Features:*  \n`;
-        message += `    🔹 *Limit Orders*  \n`;
-        message += `    🔹 *Positions Tracking*  \n`;
-        message += `    🔹 *Buy & Sell PnL Calculation*  \n\n`;
-        
-        message += `📢 *Stay Connected!*  \n`;
-        message += `👥 [Join our Telegram](https://t.me/myBuySolBot)  \n`;
-        message += `👥 [Follow us on Twitter](https://x.com/myBuyBot)  \n`;
-        message += `🔔 *More features coming soon!*`;
-        
-        // Send the message
-        bot.sendMessage(chatId, message, { parse_mode: "Markdown", ...options });
-        
-
-    } catch (error) {
-        bot.sendMessage(chatId, "❌ Error /start.");
-    }
+    await showMainMenu(bot, chatId, connection);
 });
 
 // Check SOL balance of current wallet
@@ -1202,10 +995,7 @@ bot.onText(/\/sell/, async (msg) => {
 // View detailed information about your tokens
 bot.onText(/\/positions/, async (msg) => {
     const chatId = msg.chat.id;
-    // if (!allowedUsers.includes(msg.from.id)) {
-    //     return bot.sendMessage(chatId, "🚫 Access denied. You are not authorized to use this bot.");
-    // }
-    bot.sendMessage(chatId, "positions coming soon!\n");
+    await showPositionMenu(bot, chatId, wallets[chatId]);
 })
 // Configure your settings
 bot.onText(/\/settings/, async (msg) => {
@@ -1234,10 +1024,8 @@ bot.onText(/\/burn/, async (msg) => {
 // Withdraw tokens or SOL
 bot.onText(/\/withdraw/, async (msg) => {
     const chatId = msg.chat.id;
-    // if (!allowedUsers.includes(msg.from.id)) {
-    //     return bot.sendMessage(chatId, "🚫 Access denied. You are not authorized to use this bot.");
-    // }
-    bot.sendMessage(chatId, "Message withdraw coming soon!\n");
+    userWithdrawData[chatId] = {}; // Reset
+    await showWithdrawMenu(bot, chatId, null, userWithdrawData[chatId]);
 })
 // FAQ and Telegram channel
 bot.onText(/\/help/, async (msg) => {
@@ -1273,65 +1061,12 @@ bot.on("message", async (msg) => {
         }
 
         // Store user input & reset mode
-        userWithdrawData[chatId].solAmount = solAmount;
+        userWithdrawData[chatId].lamportsToSend = solAmount * LAMPORTS_PER_SOL;
         userWithdrawData[chatId].awaitingAmount = false;
 
         // Refresh Withdraw Menu with updated amount
-        return showWithdrawMenu(chatId);
+        return;
     }
 });
-
-async function refreshWithdrawMenu(chatId, messageId) {
-    const activeIndex = wallets[chatId].activeWallet || 0;
-    const userWallet = wallets[chatId].wallets[activeIndex];
-    const publicKey = userWallet.publicKey;
-    const balance = await checkWallet(publicKey, connection);
-
-    let solAmount = userWithdrawData[chatId]?.solAmount || "X";  // Default "X"
-    let withdrawalAddress = userWithdrawData[chatId]?.withdrawalAddress || "Not Set";
-    const selectedPercentage = userWithdrawData[chatId]?.selectedPercentage || "Not Set"; // Default 100%
-
-    // ✅ Prevent division error: Only divide if solAmount is a valid number
-    let formattedAmount = (typeof solAmount === "number") ? (solAmount / LAMPORTS_PER_SOL).toFixed(4) : "X";
-
-    let withdrawText = `💸 *Withdraw $SOL* — (Solana)  
-📄 *Balance:* ${balance.toFixed(4)} SOL  
-💰 *Amount:* ${formattedAmount} SOL  
-🏦 *To:* \`${withdrawalAddress}\``;
-
-    let withdrawMenuButtons = [
-        [{ text: "⬅️ Back", callback_data: "main_menu" }, { text: "🔄 Refresh", callback_data: "withdraw" }],
-        [
-            { text: `${selectedPercentage === 50 ? "✅" : "🔹"} 50%`, callback_data: "withdraw_50" },
-            { text: `${selectedPercentage === 100 ? "✅" : "🔹"} 100%`, callback_data: "withdraw_100" }
-        ],
-        [{ text: `✏️ ${formattedAmount} SOL`, callback_data: "custom_withdraw_amount" }],
-        [{ text: `🏦 ${withdrawalAddress === "Not Set" ? "Set" : "Change"} Withdrawal Address`, callback_data: "set_withdrawal_address" }]
-    ];
-
-    // ✅ Update the original withdraw menu message (without the Withdraw button)
-    bot.editMessageText(withdrawText, {
-        chat_id: chatId,
-        message_id: messageId,
-        parse_mode: "Markdown",
-        reply_markup: { inline_keyboard: withdrawMenuButtons }
-    });
-
-    // ✅ If both SOL amount and withdrawal address are set, send a **new message** with the Withdraw button
-    if (solAmount !== "X" && withdrawalAddress !== "Not Set") {
-        const withdrawConfirmationText = `💸 *Confirm Withdrawal*
-✅ *Active Wallet:* W${activeIndex + 1}     
-📄 *Balance:* ${balance.toFixed(4)} SOL  
-💰 *Amount:* ${(solAmount/LAMPORTS_PER_SOL).toFixed(4)} SOL  
-🏦 *To:* \`${withdrawalAddress}\``;
-
-        await bot.sendMessage(chatId, withdrawConfirmationText, {
-            parse_mode: "Markdown",
-            reply_markup: {
-                inline_keyboard: [[{ text: "✅ WITHDRAW", callback_data: "confirm_withdraw" }]]
-            }
-        });
-    }
-}
 
 console.log("Telegram bot is running...");

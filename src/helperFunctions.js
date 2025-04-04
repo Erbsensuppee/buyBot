@@ -217,7 +217,7 @@ async function storeTokenData(outputMint, filePath, tokenBalance, debugFilePath,
   }
 
   const feeFromSolscan = 0;
-  const tokenPrice = (parseFloat(SOLAMOUNT) + feeFromSolscan) / humanReadableBalance;
+  const tokenPrice = (parseFloat(SOLAMOUNT/LAMPORTS_PER_SOL) + feeFromSolscan) / humanReadableBalance;
 
   // Check if token already exists
   const tokenIndex = tokens.findIndex(token => token.tokenMint === outputMint);
