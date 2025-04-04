@@ -1,5 +1,5 @@
 const { checkWallet } = require("../checkWallet.js"); 
-const { loadWallets } = require("./allWallets");
+const { loadWallets,saveWallets } = require("./allWallets");
 const { LAMPORTS_PER_SOL } = require('@solana/web3.js');
 
 async function showWalletsMenu(bot, chatId, messageId, connection) {
@@ -25,18 +25,24 @@ async function showWalletsMenu(bot, chatId, messageId, connection) {
             for (let i = 0; i < wallets[chatId].wallets.length; i++) {
                 const userWallet = wallets[chatId].wallets[i];
                 const publicKey = userWallet.publicKey;
-
-                // Use stored lamports or fallback to checkWallet
+            
                 const lamports = userWallet.solBalanceLamports !== undefined
                     ? userWallet.solBalanceLamports
                     : await checkWallet(publicKey, connection);
-
+            
+                if (userWallet.solBalanceLamports === undefined) {
+                    userWallet.solBalanceLamports = lamports;
+                }
+            
                 const balanceSol = lamports / LAMPORTS_PER_SOL;
                 const checkmark = (i === activeIndex) ? "✅" : "";
                 solanaText += `\`${publicKey}\`\n*Label:* W${i + 1} ${checkmark}\n*Balance:* ${balanceSol.toFixed(4)} SOL\n\n`;
-
+            
                 solanaWalletButtons.push({ text: `W${i + 1} ${checkmark}`, callback_data: `set_active_wallet_${i}` });
             }
+            
+            // After the loop:
+            saveWallets(wallets);            
 
             const formattedButtons = [];
             for (let i = 0; i < solanaWalletButtons.length; i += 3) {

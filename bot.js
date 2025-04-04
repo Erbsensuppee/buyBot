@@ -774,8 +774,7 @@ bot.on("callback_query", async (query) => {
             // Refresh UI
             fetchSellPrice(chatId, userSellData[chatId].tokenMint);
         });
-    }
-    else if (data.startsWith("confirm_sell_")){
+    } else if (data.startsWith("confirm_sell_")){
         const inputMint = data.split("_")[2]; // Extract token mint
         const outputMint = process.env.SOLANA_ADDRESS;
         // Ensure userBuyData[chatId] exists
